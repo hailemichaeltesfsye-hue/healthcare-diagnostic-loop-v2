@@ -1,0 +1,188 @@
+Metadata-Version: 2.4
+Name: healthcare-diagnostic-loop
+Version: 0.1.0
+Summary: Autonomous Digital Workforce applied to Healthcare Domain via Agentic Loop
+Requires-Python: >=3.11
+Description-Content-Type: text/markdown
+Requires-Dist: pydantic>=2.0
+Requires-Dist: pydantic-ai>=0.0.1
+Requires-Dist: langgraph>=0.1.0
+Requires-Dist: chromadb>=0.4.0
+Requires-Dist: streamlit>=1.39.0
+Requires-Dist: python-dotenv>=1.0.0
+Requires-Dist: groq>=0.9.0
+Requires-Dist: rich>=13.0.0
+Requires-Dist: assemblyai>=0.35.0
+Requires-Dist: gTTS>=2.5.2
+Provides-Extra: voice-playback
+Requires-Dist: playsound==1.2.2; extra == "voice-playback"
+
+# AI-Driven Healthcare Diagnostic Loop
+
+**Autonomous P2P Multi-Agent Healthcare Platform with Multilingual Voice I/O and a Live Motion Graph UI**
+
+An enterprise-grade digital multi-agent workforce applied to the healthcare domain. Built with **Python 3.11+**, **Pydantic**, **LangGraph**, **Groq**, **AssemblyAI**, **gTTS**, **ChromaDB**, and **Streamlit**, the system models a production-style clinical command center where decentralized sub-workers coordinate using a pure **peer-to-peer (P2P)** asynchronous workflow — no central supervisor bottleneck — with a real self-healing retry loop, deterministic PII/PHI screening, and a full voice-in / voice-out interaction round-trip.
+
+---
+
+## Table of Contents
+
+1. [How a Case Flows Through the System](#how-a-case-flows-through-the-system)
+2. [Project Structure](#project-structure)
+3. [Module Guide](#module-guide)
+4. [Agents](#agents)
+5. [Getting Started](#getting-started)
+6. [Configuration Reference](#configuration-reference)
+7. [Known Limitations](#known-limitations)
+8. [Author](#author)
+
+---
+
+## How a Case Flows Through the System
+
+```
+ 🎙️ voice_input → 🩺 triage ↔ 📚 researcher → 🧠 diagnostic ⟲ 🔁 critic → 🛡️ compliance → 👨‍⚕️ hitl → 📋 final_compile → 🔊 voice_output
+```
+
+1. **voice_input** *(optional)* — if the patient uploaded or recorded audio, AssemblyAI transcribes it and auto-detects the spoken language (English, Amharic, Arabic, Chinese, French, Hindi). No-op for text-only intake.
+2. **triage** — extracts structured symptom labels from the (PII-redacted) patient statement, via Groq LLM reasoning with a deterministic keyword fallback.
+3. **researcher** — pulls supporting medical reference data through the custom MCP tool server and the vector store.
+4. **diagnostic** — runs a real Tree-of-Thoughts: scores 3 candidate clinical paths 0–10.
+5. **critic** — the self-healing gate. Confidence ≥ 7.0 → approved, on to compliance. Below threshold → loops back to `diagnostic` with concrete feedback (capped at 3 retries).
+6. **compliance** — deterministic (regex-based) PII/legal-risk screen. If clean, composes the final report **directly in the patient's detected language**. If risk is found, sends **zero patient content** to any LLM and returns a static, pre-translated halt notice instead.
+7. **hitl** — human-in-the-loop checkpoint; a practitioner must approve before the case is marked complete.
+8. **final_compile** — finalizes status without ever overwriting the already-localized report text.
+9. **voice_output** — gTTS speaks `final_clinical_report` back in the patient's detected language and saves it as an MP3.
+
+A compliance failure short-circuits straight from `compliance` to `voice_output`, skipping `hitl`/`final_compile` (which exist for passing cases), so the patient still hears the localized halt notice.
+
+## Project Structure
+
+```
+ai-driven-healthcare-diagnostic-loop/
+├── app.py                          # Streamlit dashboard — live motion graph UI, voice intake/output, exports
+├── pyproject.toml                  # Project metadata and dependencies
+├── uv.lock                         # Locked dependency versions
+├── .env.example                    # Template for required environment variables
+│
+├── scripts/
+│   ├── run_voice_loop.py           # CLI: run one case end-to-end from an audio file
+│   ├── purge_voice_outputs.py      # CLI: sweep old synthesized-report MP3s off disk (PHI retention)
+│   └── test_groq.py                # Standalone Groq connectivity smoke test
+│
+└── src/
+    ├── graph/                      # Orchestration layer: state, nodes, routing, graph assembly
+    │   ├── state.py                #   SharedState — the single typed object passed between all nodes
+    │   ├── nodes.py                #   Thin async adapters binding each agent to the graph
+    │   ├── edges.py                #   Conditional routing logic (critic retry gate, compliance branch)
+    │   └── pipeline.py             #   compile_workflow() — assembles the 9-node LangGraph StateGraph
+    │
+    ├── agents/                     # The clinical reasoning workforce
+    │   ├── triage.py                #   Symptom extraction (Groq LLM + rule-based fallback)
+    │   ├── researcher.py            #   Medical reference lookup via MCP tools
+    │   ├── diagnostic.py            #   Tree-of-Thoughts diagnostic reasoning + confidence scoring
+    │   ├── critic.py                #   Self-healing retry gate (reads diagnostic_confidence)
+    │   ├── compliance.py            #   PII/legal screening + localized final report composition
+    │   └── supervisor.py            #   Legacy sequential runner (not wired into compile_workflow)
+    │
+    ├── llm/                        # Shared LLM plumbing used by triage/diagnostic/compliance
+    │   └── groq_client.py           #   Retrying, JSON-mode Groq wrapper + token/cost accounting
+    │
+    ├── compliance/                 # Deterministic PII/PHI screening (no LLM involved)
+    │   ├── pii_redaction.py         #   Regex-based email/SSN/card/ID/phone detection + redaction
+    │   └── halt_templates.py        #   Static, pre-translated halt notices (6 languages)
+    │
+    ├── voice/                      # The multilingual voice round-trip
+    │   ├── language_support.py      #   Single source of truth: language codes ↔ display names ↔ flags
+    │   ├── transcription_service.py #   AssemblyAI wrapper (speech → text + language detection)
+    │   ├── synthesis_service.py     #   gTTS wrapper (text → speech in the patient's language)
+    │   ├── nodes.py                  #   voice_input_node / voice_output_node (LangGraph adapters)
+    │   └── retention.py              #   Purge helper for old synthesized-report MP3s
+    │
+    ├── db/
+    │   └── vector_store.py           # ChromaDB — retrieves historical patient context for reasoning
+    │
+    └── mcp_server/                  # Custom Model Context Protocol tool server
+        ├── server.py                 #   MCP server implementation
+        └── tools.py                  #   Exposed tools (medical guidelines, drug interactions, etc.)
+```
+
+## Module Guide
+
+### `src/graph/` — Orchestration
+The strictly-typed `SharedState` (Pydantic) is the only thing passed between nodes — no untyped dicts, no hidden agent context. `pipeline.py` assembles the full 9-node graph, including the conditional edges that make the critic retry loop and the compliance short-circuit actually work (previously dormant code in `edges.py` that nothing else in the repo ever triggered).
+
+### `src/agents/` — Clinical Reasoning
+Each agent prefers a Groq-backed LLM call and falls back to deterministic, English-only rules if `GROQ_API_KEY` is missing or a call fails — a transient LLM outage degrades the loop instead of crashing it (`current_step` gets a `_FALLBACK` suffix so this is visible on the dashboard).
+
+### `src/llm/` — Shared Reasoning Infrastructure
+One hardened Groq client (retries, JSON-mode parsing, token/cost accounting) used by every agent that reasons over patient data, instead of each hand-rolling its own.
+
+### `src/compliance/` — Deterministic PII/PHI Screening
+PII/legal-risk detection is regex-based pattern matching in Python, not an LLM's judgment call. This is auditable, testable offline, and — critically — means that when risk is detected, **zero patient content is ever sent to a third-party LLM**; the halt notice is a static, pre-written template per language instead of an LLM generation. Triage's LLM prompt is also built from the redacted text, since triage runs before compliance and would otherwise leak PII one step earlier.
+
+> This is one layer of defense-in-depth (regex pattern matching), not a complete HIPAA de-identification solution. Have it reviewed against your actual regulatory requirements before relying on it in production.
+
+### `src/voice/` — Multilingual Voice Round-Trip
+`voice_input_node` and `voice_output_node` bookend the clinical pipeline and are no-ops for text-only runs, so nothing here breaks existing text-based callers. Raw patient audio is deleted immediately after transcription (success or failure) since it's PHI; synthesized report MP3s persist for playback but should be swept periodically with `scripts/purge_voice_outputs.py`.
+
+### `src/db/` and `src/mcp_server/`
+Unchanged from the original architecture: an in-memory ChromaDB store for historical patient context, and a custom MCP tool server the researcher agent queries for medical guidelines and drug-interaction checks.
+
+## Agents
+
+| Agent | File | Role |
+|---|---|---|
+| Triage | `agents/triage.py` | Extracts structured symptoms from the patient's statement, in its original language |
+| Researcher | `agents/researcher.py` | Gathers supporting medical/clinical reference data via MCP tools |
+| Diagnostic | `agents/diagnostic.py` | Tree-of-Thoughts reasoning — scores 3 candidate paths, reports a 0–10 confidence |
+| Critic | `agents/critic.py` | Gates diagnostic confidence; drives the self-healing retry loop |
+| Compliance | `agents/compliance.py` | Deterministic PII/legal screen; composes the localized final report |
+| Supervisor | `agents/supervisor.py` | Legacy sequential runner, kept for reference — not part of `compile_workflow()` |
+
+## Getting Started
+
+```bash
+# 1. Install every dependency (Groq, AssemblyAI, gTTS, LangGraph, Streamlit, ChromaDB, ...)
+pip install -e .          # or: uv pip install -e .
+
+# 2. Configure credentials
+cp .env.example .env
+# then edit .env and fill in GROQ_API_KEY and ASSEMBLYAI_API_KEY
+
+# 3. Launch the dashboard
+streamlit run app.py
+```
+
+**Optional CLI usage**, without the UI:
+
+```bash
+# Run one case end-to-end from an audio file
+uv run python scripts/run_voice_loop.py path/to/symptoms.wav --auto-approve
+
+# Sweep synthesized-report MP3s older than 24h (schedule via cron / Task Scheduler)
+uv run python scripts/purge_voice_outputs.py --hours 24
+```
+
+## Configuration Reference
+
+| Variable | Required | Purpose |
+|---|---|---|
+| `GROQ_API_KEY` | For real LLM reasoning | Triage/diagnostic/compliance fall back to rule-based logic without it |
+| `ASSEMBLYAI_API_KEY` | For voice input | Required only if a patient uploads/records audio |
+| `GROQ_MODEL` | No | Override the default Groq model (`openai/gpt-oss-120b`) |
+| `VOICE_AUTO_PLAY` | No | `true` (default) for CLI use; set `false` for the Streamlit app, which plays audio client-side instead |
+| `KEEP_VOICE_AUDIO_ARTIFACTS` | No | `true` disables automatic deletion of raw input audio — debugging only, never recommended in production |
+
+## Known Limitations
+
+- **PII redaction is pattern-based, not a full de-identification system.** It catches emails, SSNs, card numbers, long ID numbers, and phone-shaped strings — not, for example, a name mentioned on its own with no attached identifier.
+- **The rule-based fallback (no Groq key) is English-only.** It exists purely so the loop doesn't crash during an LLM outage, not as a multilingual substitute.
+- **No server-generated PDF export.** Reports export as `.txt` and as a printable `.html` file instead — a true PDF would need Unicode fonts (Ethiopic, Arabic, CJK, Devanagari) embedded per script, which isn't set up here. The browser's own Print → Save as PDF on the `.html` file works correctly for all six languages.
+- **Halt-notice translations are machine-authored, not reviewed by native speakers or clinical/compliance staff.** Review the wording in `src/compliance/halt_templates.py` before production use.
+- **`supervisor.py` is legacy** and not part of the compiled graph — `critic.py` is what actually drives the self-healing loop today.
+
+## Author
+
+**Hailemichael Tesfaye Mekuria**
+[LinkedIn](https://www.linkedin.com/in/hailemichael-tesfaye-2b7114401/) · [GitHub](https://github.com/hailemichaeltesfsye-hue)

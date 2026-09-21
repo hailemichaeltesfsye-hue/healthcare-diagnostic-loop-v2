@@ -1,0 +1,1 @@
+"""MCP-compatible clinical data tool components."""

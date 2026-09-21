@@ -1,0 +1,1 @@
+"""Persistence and semantic-memory components for the diagnostic loop."""

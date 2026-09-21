@@ -1,0 +1,10 @@
+.env
+.venv/
+__pycache__/
+.streamlit/
+src/graph/healing_log.json
+*.chroma
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
