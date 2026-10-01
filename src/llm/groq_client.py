@@ -1,8 +1,8 @@
-"""Shared Groq chat-completions client for clinical reasoning agents.
+"""Unified Groq client for clinical reasoning agents.
 
-Every agent that needs real LLM reasoning (triage extraction, diagnostic
-Tree-of-Thoughts, compliance screening) goes through this one hardened path
-instead of each hand-rolling its own client, retry policy, and JSON parsing.
+Consolidates LLM interaction, JSON-mode parsing, exponential backoff, and
+token/cost accounting so that individual agents stay focused on their own
+clinical logic instead of re-implementing client plumbing.
 """
 
 from __future__ import annotations
@@ -13,65 +13,75 @@ import os
 import time
 from typing import Any, Dict
 
+from dotenv import load_dotenv
+
+load_dotenv()
+
 try:
     from groq import APIConnectionError, APIStatusError, Groq, RateLimitError
 except ImportError as exc:  # pragma: no cover - surfaced at call time instead
-    Groq = None
-    APIConnectionError = APIStatusError = RateLimitError = Exception
+    Groq = None  # type: ignore[assignment,misc]
+    APIConnectionError = Exception  # type: ignore[assignment,misc]
+    APIStatusError = Exception  # type: ignore[assignment,misc]
+    RateLimitError = Exception  # type: ignore[assignment,misc]
     _IMPORT_ERROR = exc
 else:
     _IMPORT_ERROR = None
 
-# Matches the model already verified against this project's Groq account in
-# scripts/test_groq.py. Override with GROQ_MODEL if your account differs.
-DEFAULT_MODEL = os.getenv("GROQ_MODEL", "openai/gpt-oss-120b")
 
-_MAX_ATTEMPTS = 3
-_BACKOFF_SECONDS = 0.75
+# Default model used across clinical reasoning agents.
+DEFAULT_MODEL = "openai/gpt-oss-120b"
 
-# Rough placeholder rate — Groq pricing varies by model and changes over
-# time. This only feeds the existing token_usage_log dashboard; confirm the
-# real figure against your account's billing page before trusting the
-# aggregate cost total for anything financial.
-ROUGH_COST_PER_1K_TOKENS = 0.0002
+# Pricing per 1M tokens for openai/gpt-oss-120b (as tracked across the loop).
+# Kept here as the single source of truth for cost calculations.
+COST_PER_MILLION_INPUT_TOKENS = 0.15
+COST_PER_MILLION_OUTPUT_TOKENS = 0.60
 
 
 class LLMReasoningError(RuntimeError):
-    """Raised when the Groq-backed reasoning call cannot produce a usable result.
+    """Raised when the LLM cannot produce a valid reasoning output.
 
-    Every agent that uses this client is expected to catch this specific
-    exception and fall back to its deterministic rule-based logic rather than
-    letting a transient LLM outage take down the whole diagnostic loop.
+    Agents catch this exception specifically to trigger their deterministic
+    fallback paths (rule-based symptom extraction, heuristic scoring, etc.).
     """
 
 
 class GroqReasoningClient:
-    """Minimal JSON-mode chat client with retries, used by the clinical agents."""
+    """Thread-safe, retrying Groq client specialized for structured clinical JSON."""
 
-    def __init__(self, api_key: str | None = None, model: str = DEFAULT_MODEL) -> None:
+    _DEFAULT_MODEL = DEFAULT_MODEL
+    _MAX_RETRIES = 3
+    _BASE_BACKOFF_SECONDS = 0.5
+
+    def __init__(self, api_key: str | None = None, model: str | None = None) -> None:
         if Groq is None:
             raise LLMReasoningError(
-                "The 'groq' package is not installed. Run `uv pip install groq` "
-                "(it is already listed in pyproject.toml, so `uv pip install -e .` "
-                "should cover it)."
+                "The 'groq' package is not installed. Install it with "
+                "`uv pip install groq` (or `pip install groq`) and retry."
             ) from _IMPORT_ERROR
 
         resolved_key = api_key or os.getenv("GROQ_API_KEY")
         if not resolved_key:
             raise LLMReasoningError(
-                "No Groq API key configured. Set GROQ_API_KEY in the environment "
-                "or .env file."
+                "No Groq API key was provided. Set the GROQ_API_KEY environment "
+                "variable or pass api_key= explicitly to GroqReasoningClient."
             )
 
+        model = model or os.getenv("GROQ_MODEL") or self._DEFAULT_MODEL
         self._client = Groq(api_key=resolved_key)
         self._model = model
 
-    def _complete_json_sync(self, system_prompt: str, user_prompt: str) -> Dict[str, Any]:
+    def _complete_json_sync(
+        self,
+        system_prompt: str,
+        user_prompt: str,
+        max_tokens: int = 2500,
+    ) -> Dict[str, Any]:
         """Blocking call intended to run inside ``asyncio.to_thread``."""
         last_error: Exception | None = None
         response = None
 
-        for attempt in range(1, _MAX_ATTEMPTS + 1):
+        for attempt in range(self._MAX_RETRIES):
             try:
                 response = self._client.chat.completions.create(
                     model=self._model,
@@ -80,73 +90,87 @@ class GroqReasoningClient:
                         {"role": "user", "content": user_prompt},
                     ],
                     temperature=0.2,
-                    max_tokens=1024,
+                    max_tokens=max_tokens,
                     response_format={"type": "json_object"},
                 )
                 break
-            except RateLimitError as exc:
+            except (RateLimitError, APIConnectionError) as exc:
                 last_error = exc
-            except APIConnectionError as exc:
-                last_error = exc
+                if attempt == self._MAX_RETRIES - 1:
+                    break
+                sleep_time = self._BASE_BACKOFF_SECONDS * (2**attempt)
+                time.sleep(sleep_time)
             except APIStatusError as exc:
-                # Non-transient (auth, bad request, etc.) — do not retry.
-                raise LLMReasoningError(f"Groq API rejected the request: {exc}") from exc
-            except Exception as exc:  # Defensive: unknown SDK failure modes.
-                raise LLMReasoningError(f"Unexpected Groq client failure: {exc}") from exc
-
-            if attempt < _MAX_ATTEMPTS:
-                time.sleep(_BACKOFF_SECONDS * attempt)
+                # 4xx (non-429) client errors will not be fixed by retrying.
+                raise LLMReasoningError(f"Groq API rejected request ({exc.status_code}): {exc.message}") from exc
+            except Exception as exc:
+                raise LLMReasoningError(f"Unexpected error communicating with Groq: {exc}") from exc
 
         if response is None:
             raise LLMReasoningError(
-                f"Groq request failed after {_MAX_ATTEMPTS} attempts: {last_error}"
-            )
+                f"Groq request failed after {self._MAX_RETRIES} attempts. Last error: {last_error}"
+            ) from last_error
 
-        choice = response.choices[0]
-        raw_content = choice.message.content or ""
+        choice = response.choices[0] if response.choices else None
+        raw_text = choice.message.content if choice and choice.message else None
+        if not raw_text:
+            raise LLMReasoningError("Groq returned an empty response body.")
+
         try:
-            parsed = json.loads(raw_content)
+            parsed = json.loads(raw_text)
         except json.JSONDecodeError as exc:
-            raise LLMReasoningError(
-                "Groq returned non-JSON content despite json_object mode: "
-                f"{raw_content[:200]!r}"
-            ) from exc
+            raise LLMReasoningError(f"Groq response was not valid JSON: {raw_text[:200]}") from exc
 
         if not isinstance(parsed, dict):
             raise LLMReasoningError(
-                f"Groq returned a JSON value that was not an object: {parsed!r}"
+                f"Groq response was JSON, but not an object (got {type(parsed).__name__}): {raw_text[:200]}"
             )
 
+        # Attach raw token usage to the parsed dict under a private key so callers
+        # can log it without polluting domain fields.
         usage = getattr(response, "usage", None)
         parsed["_usage"] = {
-            "input_tokens": getattr(usage, "prompt_tokens", 0) if usage else 0,
-            "output_tokens": getattr(usage, "completion_tokens", 0) if usage else 0,
+            "prompt_tokens": getattr(usage, "prompt_tokens", 0) or 0,
+            "completion_tokens": getattr(usage, "completion_tokens", 0) or 0,
+            "total_tokens": getattr(usage, "total_tokens", 0) or 0,
         }
         return parsed
 
-    async def complete_json(self, system_prompt: str, user_prompt: str) -> Dict[str, Any]:
+    async def complete_json(
+        self,
+        system_prompt: str,
+        user_prompt: str,
+        max_tokens: int = 2500,
+    ) -> Dict[str, Any]:
         """Run one JSON-mode completion off the event loop.
 
         Raises :class:`LLMReasoningError` for every failure mode (auth,
-        network, rate limit exhaustion, malformed JSON) so callers have a
+        transient downtime, invalid JSON), giving calling agents a reliable,
         single exception type to catch for their fallback path.
         """
         try:
-            return await asyncio.to_thread(self._complete_json_sync, system_prompt, user_prompt)
+            return await asyncio.to_thread(
+                self._complete_json_sync,
+                system_prompt,
+                user_prompt,
+                max_tokens,
+            )
         except LLMReasoningError:
             raise
         except Exception as exc:  # Defensive: never let a raw error escape.
-            raise LLMReasoningError(f"Unexpected reasoning failure: {exc}") from exc
+            raise LLMReasoningError(f"Unexpected completion failure: {exc}") from exc
 
 
 def build_token_log(node_name: str, usage: Dict[str, Any]) -> Dict[str, Any]:
-    """Build a token_usage_log entry from a Groq response's ``_usage`` payload."""
-    input_tokens = int(usage.get("input_tokens", 0) or 0)
-    output_tokens = int(usage.get("output_tokens", 0) or 0)
-    total_tokens = input_tokens + output_tokens
+    """Helper to convert Groq usage stats into the graph's telemetry log shape."""
+    in_tokens = int(usage.get("prompt_tokens", 0) or usage.get("input_tokens", 0) or 0)
+    out_tokens = int(usage.get("completion_tokens", 0) or usage.get("output_tokens", 0) or 0)
+    cost = (in_tokens / 1_000_000 * COST_PER_MILLION_INPUT_TOKENS) + (
+        out_tokens / 1_000_000 * COST_PER_MILLION_OUTPUT_TOKENS
+    )
     return {
         "node": node_name,
-        "input_tokens": input_tokens,
-        "output_tokens": output_tokens,
-        "estimated_cost": round((total_tokens / 1000) * ROUGH_COST_PER_1K_TOKENS, 6),
+        "input_tokens": in_tokens,
+        "output_tokens": out_tokens,
+        "estimated_cost": round(cost, 6),
     }

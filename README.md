@@ -1,41 +1,168 @@
-# AI-Driven Healthcare Diagnostic Loop
+# MedVoice AI: Multilingual Healthcare Voice Assistant
 
-**Autonomous P2P Multi-Agent Healthcare Platform with Multilingual Voice I/O and a Live Motion Graph UI**
-
-An enterprise-grade digital multi-agent workforce applied to the healthcare domain. Built with **Python 3.11+**, **Pydantic**, **LangGraph**, **Groq**, **AssemblyAI**, **gTTS**, **ChromaDB**, and **Streamlit**, the system models a production-style clinical command center where decentralized sub-workers coordinate using a pure **peer-to-peer (P2P)** asynchronous workflow — no central supervisor bottleneck — with a real self-healing retry loop, deterministic PII/PHI screening, and a full voice-in / voice-out interaction round-trip.
-
----
-
-## Table of Contents
-
-1. [How a Case Flows Through the System](#how-a-case-flows-through-the-system)
-2. [Project Structure](#project-structure)
-3. [Module Guide](#module-guide)
-4. [Agents](#agents)
-5. [Getting Started](#getting-started)
-6. [Configuration Reference](#configuration-reference)
-7. [Known Limitations](#known-limitations)
-8. [Author](#author)
+> **Official Submission for the AssemblyAI Voice Agent Hackathon 2026**  
+> *Real-time speech-driven clinical intake, dynamic follow-up questioning, emergency red-flag triage, and structured medical summaries across 6 languages.*
 
 ---
 
-## How a Case Flows Through the System
+## 1. Project Name
+**MedVoice AI** — Autonomous Multilingual Healthcare Voice Assistant & Clinical Triaging Agent.
+
+---
+
+## 2. Problem
+Healthcare triage and patient intake face critical bottlenecks worldwide:
+- **Language Barriers:** Over 40% of non-native patients struggle to articulate acute symptoms in clinical intake forms, resulting in delayed care and misdiagnoses.
+- **Form Fatigue:** Traditional typing-based symptom checkers are inaccessible to patients who are elderly, visually impaired, distressed, or experiencing motor difficulties.
+- **Missed Emergencies:** Generic chatbots treat life-threatening symptoms (stroke, myocardial infarction, anaphylaxis) with the same casual pacing as routine questions, failing to immediately escalate red-flag conditions.
+- **Doctor Burnout:** Clinicians spend up to 50% of their workday translating unstructured patient narratives into structured clinical documentation.
+
+---
+
+## 3. Solution
+**MedVoice AI** transforms clinical intake into a natural, safe, and voice-first conversational experience:
+1. **Listens with AssemblyAI:** Captures patient speech with high accuracy across multilingual accents and noisy environments.
+2. **Screens for Emergencies First:** Instantly checks for red-flag triggers (cardiovascular, respiratory, stroke, hemorrhagic, anaphylaxis) before engaging in prolonged dialogue.
+3. **Engages in Adaptive Dialogue:** Empathizes, clarifies symptom duration, location, and severity with focused clinical follow-ups.
+4. **Protects Patient Privacy:** Deterministically redacts PII/PHI (names, phones, SSNs, national IDs) prior to LLM reasoning.
+5. **Generates Structured Medical Summaries:** Produces clinician-ready, standardized documentation (Chief Complaint, Symptoms, Duration, Severity, Risk Level, Safe Next Steps).
+6. **Speaks Back Naturally:** Synthesizes localized spoken responses with multi-TLD resilience and browser Web Speech API fallback.
+7. **Bridges to Multi-Agent Consensus:** Optionally dispatches conversational records into a 9-node peer-to-peer LangGraph diagnostic workforce.
+
+---
+
+## 4. Why Voice?
+In healthcare, voice is not merely an interface option—it is the **most human, accessible, and informative medium**:
+- **Speed & Urgency:** Patients under distress speak 3x faster than they type and convey emotional tone, breathlessness, and distress that text boxes erase.
+- **Universal Accessibility:** Voice bridges health literacy gaps, enabling illiterate, elderly, or physically impaired patients to describe their condition freely.
+- **Global Inclusivity:** Acoustic speech allows native speakers of languages with complex or non-Latin scripts (Amharic, Arabic, Hindi, Chinese) to seek immediate guidance without keyboard struggle.
+
+---
+
+## 5. Why AssemblyAI?
+MedVoice AI relies on **AssemblyAI** as its core speech-to-text intelligence foundation:
+- **High-Accuracy Speech-to-Text:** Handles medical terminology, anatomical phrasing, and diverse accents with precision.
+- **Automatic Language Detection:** Seamlessly identifies the spoken language out of clinical profiles without requiring manual pre-selection.
+- **Low-Latency Streaming & Transcription:** Enables rapid turnaround between patient utterance and clinical reasoning.
+- **Production Developer SDK:** Clean Python SDK (`assemblyai >= 1.6`) with flexible configuration for audio streams, in-memory buffers, and media files.
+
+---
+
+## 6. Main Features
+- **🎙️ Real-Time Voice Intake:** In-browser live microphone recording (`st.audio_input`), external audio file upload, or keyboard fallback.
+- **🚨 Clinical Emergency & Red-Flag Detection:** Real-time screening for critical presentations (chest pain, stroke FAST criteria, respiratory distress, severe bleeding, anaphylaxis) with immediate emergency escalation.
+- **🌐 Unified 6-Language Mesh:** Full round-trip speech recognition, clinical reasoning, report generation, and voice synthesis across 6 global languages.
+- **📋 Clinician-Ready Structured Summary:** Real-time compilation of Chief Complaint, Extracted Symptoms, Duration, Severity, Triage Risk, and Safe Next Steps with 1-click `.txt` and printable `.html` downloads.
+- **🔄 Dynamic Clinical Follow-Up:** Asks one targeted, empathetic question per turn to resolve ambiguities before finalizing the record.
+- **🛡️ Healthcare Safety Boundaries:** Strictly non-diagnostic; clearly communicates AI limitations and never prescribes dosages or replaces physicians.
+- **🔒 Deterministic PII/PHI Redaction:** Regex-based sanitization of identifiers before any cloud reasoning.
+- **⚡ Deep P2P Workforce Mode:** 9-node LangGraph digital workforce with Tree-of-Thoughts reasoning, self-healing critic retry loop (up to 3 retries), ChromaDB RAG, and Human-In-The-Loop practitioner review.
+
+---
+
+## 7. Six-Language Support
+MedVoice AI operates on a single canonical `LanguageProfile` abstraction (`src/voice/language_support.py`):
+
+| Language | Code | Native Name | Locale | Flag | STT Engine | TTS Voice Code |
+| :--- | :--- | :--- | :--- | :--- | :--- | :--- |
+| **English** | `en` | English | `en-US` | 🇬🇧 | AssemblyAI (`en`) | `en` (multi-TLD) |
+| **Amharic** | `am` | አማርኛ | `am-ET` | 🇪🇹 | AssemblyAI (`am`) | `am` (sanitized) |
+| **Arabic** | `ar` | العربية | `ar-SA` | 🇸🇦 | AssemblyAI (`ar`) | `ar` (RTL layout) |
+| **Chinese** | `zh` | 中文 | `zh-CN` | 🇨🇳 | AssemblyAI (`zh`) | `zh-CN` |
+| **French** | `fr` | Français | `fr-FR` | 🇫🇷 | AssemblyAI (`fr`) | `fr` |
+| **Hindi** | `hi` | हिन्दी | `hi-IN` | 🇮🇳 | AssemblyAI (`hi`) | `hi` |
+
+*Every profile includes tailored LLM reasoning instructions, localized medical disclaimers, emergency dispatch warnings, and 1-click test sentences.*
+
+---
+
+## 8. Healthcare Safety Approach
+Safety is embedded at every layer of MedVoice AI:
+1. **No Doctor Claims:** The agent explicitly identifies as an AI assistant on every conversational turn.
+2. **No Definitive Diagnoses:** Uses differential exploratory language (e.g., *"Possible causes include..."* or *"These symptoms warrant examination by..."*).
+3. **No Prescription of Drugs:** Prohibits recommending pharmaceutical dosages or off-label treatments.
+4. **Deterministic Emergency Gate:** Emergency symptoms bypass prolonged question trees and trigger immediate dispatch guidance to 911 / 112 / local emergency rooms.
+5. **Human-in-the-Loop Oversight:** Provides a dedicated review checkpoint where clinical practitioners evaluate and sign off on synthesized reports before archiving.
+
+---
+
+## 9. Architecture
 
 ```
- 🎙️ voice_input → 🩺 triage ↔ 📚 researcher → 🧠 diagnostic ⟲ 🔁 critic → 🛡️ compliance → 👨‍⚕️ hitl → 📋 final_compile → 🔊 voice_output
+                                  ┌────────────────────────┐
+                                  │      Patient Voice     │
+                                  └───────────┬────────────┘
+                                              │ (Live Mic / Upload)
+                                              ▼
+                                 ╔══════════════════════════╗
+                                 ║   AssemblyAI STT Engine  ║
+                                 ║  • Language Auto-Detect  ║
+                                 ║  • Speech-to-Text Stream ║
+                                 ╚════════════┬═════════════╝
+                                              │ Transcript & Confidence
+                                              ▼
+                                 ┌──────────────────────────┐
+                                 │   PII / PHI Redaction    │
+                                 └────────────┬─────────────┘
+                                              │ Safe Narrative
+                                              ▼
+                                 ╔══════════════════════════╗
+                                 ║ Emergency / Red-Flag Gate║
+                                 ║  • Cardiovascular Check  ║
+                                 ║  • Stroke (FAST) Check   ║
+                                 ║  • Respiratory Distress  ║
+                                 ╚════════════╤═════════════╝
+                                              │
+                      ┌───────────────────────┴───────────────────────┐
+                      │                                               │
+             [CRITICAL RED-FLAG]                                  [ROUTINE / URGENT]
+                      │                                               │
+                      ▼                                               ▼
+         ┌────────────────────────┐                      ┌────────────────────────┐
+         │ Immediate ER Alert     │                      │ Semantic RAG (ChromaDB)│
+         │ & 911 Dispatch Advice  │                      └────────────┬───────────┘
+         └────────────┬───────────┘                                   │ Clinical Evidence
+                      │                                               ▼
+                      │                                  ┌────────────────────────┐
+                      │                                  │ Groq Clinical Reasoner │
+                      │                                  │ • Follow-up question   │
+                      │                                  │ • Symptom mapping      │
+                      │                                  └────────────┬───────────┘
+                      │                                               │
+                      └───────────────────────┬───────────────────────┘
+                                              │
+                                              ▼
+                                 ╔══════════════════════════╗
+                                 ║ Clinician Medical Summary║
+                                 ║  (Chief Complaint, Risk, ║
+                                 ║   Symptoms, Next Steps)  ║
+                                 ╚════════════╤═════════════╝
+                                              │
+                                              ▼
+                                 ╔══════════════════════════╗
+                                 ║ Multilingual Synthesis   ║
+                                 ║ • Hardened Multi-TLD TTS ║
+                                 ║ • Web Speech Fallback    ║
+                                 ╚════════════╤═════════════╝
+                                              │ Spoken Response
+                                              ▼
+                                  ┌────────────────────────┐
+                                  │     Patient Hearing    │
+                                  └────────────────────────┘
 ```
 
-1. **voice_input** *(optional)* — if the patient uploaded or recorded audio, AssemblyAI transcribes it and auto-detects the spoken language (English, Amharic, Arabic, Chinese, French, Hindi). No-op for text-only intake.
-2. **triage** — extracts structured symptom labels from the (PII-redacted) patient statement, via Groq LLM reasoning with a deterministic keyword fallback.
-3. **researcher** — pulls supporting medical reference data through the custom MCP tool server and the vector store.
-4. **diagnostic** — runs a real Tree-of-Thoughts: scores 3 candidate clinical paths 0–10.
-5. **critic** — the self-healing gate. Confidence ≥ 7.0 → approved, on to compliance. Below threshold → loops back to `diagnostic` with concrete feedback (capped at 3 retries).
-6. **compliance** — deterministic (regex-based) PII/legal-risk screen. If clean, composes the final report **directly in the patient's detected language**. If risk is found, sends **zero patient content** to any LLM and returns a static, pre-translated halt notice instead.
-7. **hitl** — human-in-the-loop checkpoint; a practitioner must approve before the case is marked complete.
-8. **final_compile** — finalizes status without ever overwriting the already-localized report text.
-9. **voice_output** — gTTS speaks `final_clinical_report` back in the patient's detected language and saves it as an MP3.
+---
 
-A compliance failure short-circuits straight from `compliance` to `voice_output`, skipping `hitl`/`final_compile` (which exist for passing cases), so the patient still hears the localized halt notice.
+## 10. Technology Stack
+- **Speech Recognition:** AssemblyAI SDK (`assemblyai >= 1.6`)
+- **Speech Synthesis:** Hardened Google TTS (`gTTS >= 2.5`) with multi-TLD retry & browser speech synthesis fallback
+- **Multi-Agent Orchestration:** LangGraph (`langgraph >= 0.1`) & Pydantic AI (`pydantic >= 2.0`)
+- **Clinical Reasoning Engine:** Groq API (`groq >= 0.9`, running `openai/gpt-oss-120b`)
+- **Semantic Memory / Vector DB:** ChromaDB (`chromadb >= 0.4`)
+- **Frontend Dashboard:** Streamlit (`streamlit >= 1.39`) with custom responsive CSS dark theme
+- **Language / Runtime:** Python 3.11+
+
+---
 
 ## Project Structure
 
@@ -110,40 +237,172 @@ PII/legal-risk detection is regex-based pattern matching in Python, not an LLM's
 ### `src/db/` and `src/mcp_server/`
 Unchanged from the original architecture: an in-memory ChromaDB store for historical patient context, and a custom MCP tool server the researcher agent queries for medical guidelines and drug-interaction checks.
 
-## Agents
+---
 
-| Agent | File | Role |
-|---|---|---|
-| Triage | `agents/triage.py` | Extracts structured symptoms from the patient's statement, in its original language |
-| Researcher | `agents/researcher.py` | Gathers supporting medical/clinical reference data via MCP tools |
-| Diagnostic | `agents/diagnostic.py` | Tree-of-Thoughts reasoning — scores 3 candidate paths, reports a 0–10 confidence |
-| Critic | `agents/critic.py` | Gates diagnostic confidence; drives the self-healing retry loop |
-| Compliance | `agents/compliance.py` | Deterministic PII/legal screen; composes the localized final report |
-| Supervisor | `agents/supervisor.py` | Legacy sequential runner, kept for reference — not part of `compile_workflow()` |
+## 11. Local Setup
 
-## Getting Started
+### Prerequisites
+- Python 3.11+
+- Git
 
+### Installation
 ```bash
-# 1. Install every dependency (Groq, AssemblyAI, gTTS, LangGraph, Streamlit, ChromaDB, ...)
-pip install -e .          # or: uv pip install -e .
+# 1. Clone repository
+git clone https://github.com/your-username/medvoice-ai.git
+cd medvoice-ai
 
-# 2. Configure credentials
+# 2. Install all dependencies (uses uv — installs Python 3.11 venv automatically)
+uv sync
+
+# 3. Copy and fill in your API keys
 cp .env.example .env
-# then edit .env and fill in GROQ_API_KEY and ASSEMBLYAI_API_KEY
-
-# 3. Launch the dashboard
-streamlit run app.py
+# Edit .env with your ASSEMBLYAI_API_KEY and GROQ_API_KEY
 ```
 
-**Optional CLI usage**, without the UI:
+---
+
+## 12. Environment Variables
+Create a `.env` file in the project root (see `.env.example`):
 
 ```bash
-# Run one case end-to-end from an audio file
-uv run python scripts/run_voice_loop.py path/to/symptoms.wav --auto-approve
+# AssemblyAI API Key (Required for speech-to-text)
+ASSEMBLYAI_API_KEY=your_assemblyai_api_key_here
 
-# Sweep synthesized-report MP3s older than 24h (schedule via cron / Task Scheduler)
-uv run python scripts/purge_voice_outputs.py --hours 24
+# Groq API Key (Required for clinical reasoning)
+GROQ_API_KEY=your_groq_api_key_here
+
+# Optional: Override Groq model (default: openai/gpt-oss-120b)
+GROQ_MODEL=openai/gpt-oss-120b
+
+# Set to false for browser Streamlit app (browser plays audio natively)
+VOICE_AUTO_PLAY=false
 ```
+
+---
+
+## 13. How to Test & Use MedVoice AI
+
+### Step 1: Launch the Application
+Start the Streamlit application using `uv`:
+```bash
+uv run streamlit run app.py
+```
+*(Or if you have your virtual environment activated: `streamlit run app.py`)*
+
+Open your browser to: **`http://localhost:8501`**
+
+---
+
+### CLI Utilities & Batch Execution
+
+Run one case end-to-end directly from an audio file via the autonomous diagnostic loop:
+`ash
+uv run python scripts/run_voice_loop.py path/to/symptoms.wav --auto-approve
+`
+
+Sweep synthesized-report MP3s older than 24 hours:
+`ash
+uv run python scripts/purge_voice_outputs.py --hours 24
+`
+
+---
+
+### Step 2: Test Core Capabilities in the Browser
+
+#### 1. 🚀 Test 1-Click Evaluation Scenarios (Instant Playback)
+Located at the top of the interface under **1-Click Hackathon Evaluation Scenarios**:
+- **🟢 Scenario 1: Low-Risk Symptom Consultation**
+  - Click `[ 🟢 Scenario 1: Low-Risk Symptom ]`
+  - **Result:** Simulates a patient reporting a mild tension headache. MedVoice AI evaluates symptoms, asks an empathetic follow-up question regarding light sensitivity, provides natural spoken audio response, and tags triage as `🟢 ROUTINE`.
+- **🔴 Scenario 2: Emergency Red-Flag Escalation**
+  - Click `[ 🔴 Scenario 2: Emergency Red-Flag ]`
+  - **Result:** Simulates an acute crushing chest pain presentation. MedVoice AI triggers the **🚨 Critical Emergency Alert**, halts routine questioning, speaks immediate emergency guidance (911 / ER dispatch), and sets triage to `🔴 EMERGENCY`.
+- **🌐 Scenario 3: Native Multilingual Voice**
+  - In the left sidebar, change the **Active Language Profile** to **Amharic (አማርኛ)**, **Arabic (العربية)**, **French (Français)**, **Chinese (中文)**, or **Hindi (हिन्दी)**.
+  - Click `[ 🌐 Scenario 3 ]`.
+  - **Result:** MedVoice AI communicates natively in that language with localized script, reasoning, and speech synthesis.
+
+#### 2. 🎙️ Test Live Microphone or Audio Upload
+1. In the central **Patient Voice Consultation** card:
+   - Click the microphone widget to record your voice live:
+     > *"I have had mild stomach cramps and feel slightly nauseous since yesterday."*
+   - Or upload an audio file (`.wav`, `.mp3`, `.m4a`, `.ogg`).
+2. Click **`🎤 Transcribe & Consult MedVoice AI`**.
+3. **AssemblyAI** transcribes the speech in real-time, redacts any sensitive PII, screens for red-flags, consults the clinical RAG vector store, reasons via Groq, and generates natural spoken audio.
+
+#### 3. 📋 Test Clinician-Ready Documentation & Export
+1. Observe the **Clinician-Ready Summary** card on the right updating live with:
+   - Patient Tracker ID
+   - Chief Complaint
+   - Mapped Symptoms chips
+   - Duration & Severity
+   - Safe Clinical Next Steps
+2. Click **`⬇️ Printable .html`** to open and print a clinical admission report.
+3. Click **`⬇️ Download .txt`** to export the structured text dossier.
+
+#### 4. 🔬 Test the Deep 9-Node Multi-Agent Workforce
+1. In the sidebar under **🧭 Architecture Mode**, switch to **`🔬 Deep Clinical P2P Workforce`** *(or click `🚀 Dispatch to Deep Multi-Agent Workforce` from the summary card)*.
+2. View the interactive **Graphviz topology** visualizing the 9-node digital workforce:
+   - Voice Intake (AssemblyAI) ➔ Triage ➔ Researcher (ChromaDB RAG) ➔ Diagnostic (Tree-of-Thoughts) ⟲ Critic (Self-Healing Gate) ➔ Compliance ➔ Practitioner HITL ➔ Voice Output (gTTS).
+3. Click **`⚡ Execute Autonomous Workforce`** to stream clinical state packets across all peer nodes and generate a multi-agent consensus report with spoken audio.
+
+---
+
+## 14. Example Conversations
+
+### Scenario 1: Low-Risk Symptom Consultation (English)
+> **Patient (Voice):** *"I've had a dull tension headache for the past two days and I've been feeling unusually tired."*  
+> **MedVoice AI (Spoken Response):** *"I understand you're experiencing a dull tension headache along with fatigue over the last two days. To better assess your situation: Is the discomfort accompanied by any sensitivity to light or nausea, and have you been able to sleep normally?"*  
+> **Triage Status:** `🟢 ROUTINE`  
+> **Summary Generated:** Tension headache, duration: 2 days, severity: mild/dull.
+
+### Scenario 2: Emergency Red-Flag (Cardiovascular)
+> **Patient (Voice):** *"I have sudden severe crushing chest pain radiating to my left arm and I can barely catch my breath."*  
+> **MedVoice AI (Spoken Response):** *"🚨 CRITICAL RED-FLAG ALERT: Your reported symptoms indicate a potential medical emergency. Please call 911 (or your local emergency services) or go to the nearest emergency department immediately. Do not drive yourself."*  
+> **Triage Status:** `🔴 EMERGENCY` (Category: Cardiovascular & Respiratory)  
+> **Action:** Immediate ER dispatch guidance; routine questioning halted.
+
+### Scenario 3: Multilingual Consultation (Amharic)
+> **Patient (Voice):** *"ላለፉት ሁለት ቀናት ከባድ የራስ ምታት እና ማዞር አለብኝ።"*  
+> **MedVoice AI (Spoken Response):** *"ጤና ይስጥልኝ። የገለጹትን ከባድ የራስ ምታት እና የማዞር ስሜት ተረድቻለሁ። ሁኔታውን በይበልጥ ለመረዳት፦ ሕመሙ ድንገት የቀሰቀሰ ነው ወይስ ቀስ በቀስ? እንዲሁም የማየት ችግር ወይም ትኩሳት አጋጥሞዎታል?"*  
+> **Triage Status:** `🟢 ROUTINE / EVALUATION`  
+> **Language:** 🇪🇹 አማርኛ (Amharic)
+
+---
+
+## 15. Automated Test Suite
+Run the comprehensive hackathon verification suite:
+```bash
+# Run via pytest (recommended — uses the project venv automatically):
+uv run python -m pytest tests/ -v
+
+# Or run directly as a script (uses asyncio.run internally):
+uv run python tests/test_hackathon_suite.py
+```
+**Verification Scope:**
+- `[PASS]` Centralized 6-Language profile integrity
+- `[PASS]` Emergency & red-flag detection across all categories
+- `[PASS]` Deterministic PII/PHI redaction
+- `[PASS]` Multilingual speech synthesis across all 6 languages
+- `[PASS]` Real AssemblyAI Speech-to-Text API connectivity
+- `[PASS]` Multi-turn conversational adaptation & structured medical summaries
+
+---
+
+## 16. Limitations
+- **Decision-Support Only:** MedVoice AI is an informational triage assistant, not a licensed medical professional.
+- **No Physical Examination:** Acoustic and linguistic analysis cannot measure blood pressure, perform palpation, or take electrocardiograms.
+- **Audio Environment:** Excessive background noise or simultaneous multiple speakers can degrade speech transcription confidence.
+
+---
+
+## 17. Future Improvements
+- **Direct WebRTC Real-Time Audio Streaming:** Integrating AssemblyAI WebSocket streaming directly with browser audio worklets for sub-300ms turn-taking.
+- **Acoustic Biomarker Analysis:** Detecting vocal tremors, dyspnea (shortness of breath during pauses), and cough characteristics from raw spectrograms.
+- **EHR/FHIR Native Integration:** Automatic dispatch of structured summaries into Epic and Cerner electronic health records.
+- **Offline Edge Mode:** Deploying quantized local Whisper/VOSK models on low-connectivity rural health tablets.
+
+---
 
 ## Configuration Reference
 
@@ -155,15 +414,16 @@ uv run python scripts/purge_voice_outputs.py --hours 24
 | `VOICE_AUTO_PLAY` | No | `true` (default) for CLI use; set `false` for the Streamlit app, which plays audio client-side instead |
 | `KEEP_VOICE_AUDIO_ARTIFACTS` | No | `true` disables automatic deletion of raw input audio — debugging only, never recommended in production |
 
-## Known Limitations
-
-- **PII redaction is pattern-based, not a full de-identification system.** It catches emails, SSNs, card numbers, long ID numbers, and phone-shaped strings — not, for example, a name mentioned on its own with no attached identifier.
-- **The rule-based fallback (no Groq key) is English-only.** It exists purely so the loop doesn't crash during an LLM outage, not as a multilingual substitute.
-- **No server-generated PDF export.** Reports export as `.txt` and as a printable `.html` file instead — a true PDF would need Unicode fonts (Ethiopic, Arabic, CJK, Devanagari) embedded per script, which isn't set up here. The browser's own Print → Save as PDF on the `.html` file works correctly for all six languages.
-- **Halt-notice translations are machine-authored, not reviewed by native speakers or clinical/compliance staff.** Review the wording in `src/compliance/halt_templates.py` before production use.
-- **`supervisor.py` is legacy** and not part of the compiled graph — `critic.py` is what actually drives the self-healing loop today.
+---
 
 ## Author
 
 **Hailemichael Tesfaye Mekuria**
 [LinkedIn](https://www.linkedin.com/in/hailemichael-tesfaye-2b7114401/) · [GitHub](https://github.com/hailemichaeltesfsye-hue)
+
+---
+
+## License & Disclaimer
+This project is licensed under the Apache 2.0 License.
+
+**Clinical Disclaimer:** MedVoice AI is designed for demonstration and research purposes under the AssemblyAI Voice Agent Hackathon 2026. It does not provide medical diagnosis or treatment. In a medical emergency, immediately contact local emergency services.

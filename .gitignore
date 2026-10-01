@@ -8,3 +8,5 @@ src/graph/healing_log.json
 .pytest_cache/
 .mypy_cache/
 .ruff_cache/
+voice_output/
+*.mp3

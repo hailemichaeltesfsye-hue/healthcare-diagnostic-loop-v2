@@ -15,9 +15,15 @@ dependencies = [
     "rich>=13.0.0",
     "assemblyai>=0.35.0",
     "gTTS>=2.5.2",
+    "pytest>=9.1.1",
+    "pytest-asyncio>=1.4.0",
 ]
 
 [project.optional-dependencies]
 # Enables best-effort local autoplay of synthesized reports in voice_output_node.
 # Omit this group in headless/server deployments with no audio device.
 voice-playback = ["playsound==1.2.2"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]

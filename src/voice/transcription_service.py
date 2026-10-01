@@ -57,7 +57,7 @@ class ClinicalAudioTranscriber:
     def __init__(
         self,
         api_key: str | None = None,
-        language_confidence_threshold: float = 0.4,
+        language_confidence_threshold: float = 0.01,
     ) -> None:
         if aai is None:
             raise TranscriptionServiceError(
@@ -94,14 +94,25 @@ class ClinicalAudioTranscriber:
             )
         return path
 
-    def _transcribe_sync(self, audio_file_path: str) -> TranscriptionResult:
+    def _transcribe_sync(
+        self,
+        audio_file_path: str,
+        language_code: str | None = None,
+    ) -> TranscriptionResult:
         """Blocking transcription call, intended to run in a worker thread."""
         path = self._validate_audio_path(audio_file_path)
 
-        config = aai.TranscriptionConfig(
-            language_detection=True,
-            language_confidence_threshold=self._language_confidence_threshold,
-        )
+        if language_code and language_code.lower() != "auto":
+            profile, _ = resolve_language_profile(language_code)
+            config = aai.TranscriptionConfig(
+                language_code=profile.assemblyai_code,
+                language_detection=False,
+            )
+        else:
+            config = aai.TranscriptionConfig(
+                language_detection=True,
+                language_confidence_threshold=self._language_confidence_threshold,
+            )
 
         try:
             transcript = self._transcriber.transcribe(str(path), config=config)
@@ -123,31 +134,54 @@ class ClinicalAudioTranscriber:
                 "The audio may be silent, corrupted, or too short."
             )
 
-        detected_code = getattr(transcript, "language_code", None)
+        detected_code = getattr(transcript, "language_code", None) or language_code or "en"
         confidence = getattr(transcript, "language_confidence", None)
         _, is_supported = resolve_language_profile(detected_code)
 
         return TranscriptionResult(
             transcript_text=transcript_text,
-            detected_language_code=(detected_code or "en").lower(),
+            detected_language_code=detected_code.lower(),
             language_is_clinically_supported=is_supported,
             language_confidence=confidence,
             audio_duration_seconds=getattr(transcript, "audio_duration", None),
         )
 
-    async def transcribe(self, audio_file_path: str) -> TranscriptionResult:
-        """Transcribe ``audio_file_path`` without blocking the event loop.
-
-        The AssemblyAI SDK's ``transcribe`` call is synchronous under the
-        hood (it polls until the job completes), so it is offloaded to a
-        worker thread to stay compatible with LangGraph's async node
-        execution lifecycle.
-        """
+    async def transcribe(
+        self,
+        audio_file_path: str,
+        language_code: str | None = None,
+    ) -> TranscriptionResult:
+        """Transcribe ``audio_file_path`` without blocking the event loop."""
         try:
-            return await asyncio.to_thread(self._transcribe_sync, audio_file_path)
+            return await asyncio.to_thread(
+                self._transcribe_sync,
+                audio_file_path,
+                language_code,
+            )
         except TranscriptionServiceError:
             raise
         except Exception as exc:  # Defensive: never let a raw SDK error escape.
             raise TranscriptionServiceError(
                 f"Unexpected transcription failure: {exc}"
             ) from exc
+
+    async def transcribe_bytes(
+        self,
+        audio_bytes: bytes,
+        suffix: str = ".wav",
+        language_code: str | None = None,
+    ) -> TranscriptionResult:
+        """Transcribe raw audio bytes by writing to a temporary file."""
+        import tempfile
+        import uuid
+
+        temp_path = Path(tempfile.gettempdir()) / f"aai_voice_{uuid.uuid4().hex[:8]}{suffix}"
+        try:
+            temp_path.write_bytes(audio_bytes)
+            return await self.transcribe(str(temp_path), language_code=language_code)
+        finally:
+            if temp_path.exists():
+                try:
+                    temp_path.unlink()
+                except OSError:
+                    pass

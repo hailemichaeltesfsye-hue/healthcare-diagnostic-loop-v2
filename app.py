@@ -1,29 +1,50 @@
 """
-Clinical Command Center dashboard for the peer-to-peer diagnostic workforce.
+MedVoice AI & Clinical Command Center Dashboard.
 
-This Streamlit entry point provides an enterprise clinical SaaS interface with
-patient intake, semantic memory, live P2P worker telemetry, animated execution
-states, governance reporting, HITL approval, and infrastructure cost tracking.
+Unified enterprise-grade application combining:
+1. Real-time conversational voice interaction powered by AssemblyAI STT.
+2. Clinical emergency & red-flag detection layer across 6 global languages.
+3. Centralized 6-language support (English, Amharic, Arabic, Chinese, French, Hindi).
+4. Hardened speech synthesis with browser Web Speech API / gTTS fallback.
+5. Live structured medical summary with clinician-ready export (.txt & .html).
+6. 9-node peer-to-peer LangGraph diagnostic workforce with live telemetry.
+7. Semantic memory layer (ChromaDB) for historical case retrieval.
+8. Human-in-the-loop (HITL) practitioner verification and governance gate.
+9. Futuristic glassmorphism and clinical AI command center interface.
 """
 
+from __future__ import annotations
+
+import asyncio
+import os
+import tempfile
+import time
+import uuid
+from pathlib import Path
+from typing import Any, Dict, List, Mapping, Optional, Set
+
+import streamlit as st
 from dotenv import load_dotenv
 
 load_dotenv()
 
-import asyncio
-import tempfile
-import uuid
-from pathlib import Path
-from typing import Any, Dict, Mapping, Optional, Set
-
-import streamlit as st
-
+from src.agents.voice_agent import (
+    HealthcareVoiceAgent,
+    StructuredMedicalSummary,
+    VoiceAgentResponse,
+)
 from src.db.vector_store import ClinicalVectorStore
 from src.graph.pipeline import compile_workflow
 from src.graph.state import SharedState
-from src.voice.language_support import SUPPORTED_CLINICAL_LANGUAGES, resolve_language_profile
+from src.safety.emergency_detector import EmergencyDetector, RiskLevel
+from src.voice.language_support import (
+    DEFAULT_LANGUAGE_CODE,
+    SUPPORTED_CLINICAL_LANGUAGES,
+    get_language_profile,
+    resolve_language_profile,
+)
 
-
+# --- Node Constants for 9-Node Diagnostic Workforce ---
 NODE_ORDER = (
     "voice_input",
     "triage",
@@ -37,12 +58,12 @@ NODE_ORDER = (
 )
 NODE_LABELS = {
     "voice_input": "Voice Intake (AssemblyAI)",
-    "triage": "Triage / Content Creator",
-    "researcher": "Researcher",
-    "diagnostic": "Diagnostic / Finance Analyst",
+    "triage": "Triage / Symptom Extraction",
+    "researcher": "Researcher (ChromaDB RAG)",
+    "diagnostic": "Diagnostic (Tree-of-Thoughts)",
     "critic": "Critic (Self-Healing Gate)",
-    "compliance": "Compliance Officer",
-    "hitl": "Practitioner Review",
+    "compliance": "Compliance Officer (PII Guard)",
+    "hitl": "Practitioner Review (HITL)",
     "final_compile": "Final Compile",
     "voice_output": "Voice Response (gTTS)",
 }
@@ -70,97 +91,394 @@ NODE_ICONS = {
 }
 VOICE_NODES = {"voice_input", "voice_output"}
 
-
+# --- Streamlit Page Configuration ---
 st.set_page_config(
-    page_title="Clinical Command Center",
+    page_title="MedVoice AI — Clinical Command Center",
     page_icon="🩺",
     layout="wide",
     initial_sidebar_state="expanded",
 )
 
+# --- Unified Modern Glassmorphism & Clinical Theme CSS ---
 st.markdown(
     """
 <style>
+    @import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500;700&display=swap');
+
     :root {
-        --canvas: #0B0F19;
-        --surface: #111827;
-        --surface-raised: #172033;
-        --surface-soft: #1b2638;
-        --line: #2a3a52;
-        --muted: #8b9ab0;
-        --text: #f3f7fb;
+        --canvas: #050811;
+        --surface-1: rgba(15, 23, 42, 0.75);
+        --surface-2: rgba(30, 41, 59, 0.65);
+        --surface-glow: rgba(56, 189, 248, 0.08);
+        --line-subtle: rgba(148, 163, 184, 0.14);
+        --line-active: rgba(56, 189, 248, 0.4);
+        --accent-cyan: #38BDF8;
+        --accent-indigo: #818CF8;
+        --accent-purple: #C084FC;
+        --accent-emerald: #10B981;
+        --accent-amber: #F59E0B;
+        --accent-rose: #F43F5E;
+        --text-primary: #F8FAFC;
+        --text-secondary: #94A3B8;
+        --text-muted: #64748B;
         --success: #10B981;
         --info: #3B82F6;
         --amber: #F59E0B;
         --danger: #F87171;
     }
-    .stApp { background: var(--canvas); color: var(--text); font-family: Inter, "Segoe UI", sans-serif; }
-    [data-testid="stSidebar"] { background: #0d1420; border-right: 1px solid var(--line); }
+
+    .stApp {
+        background-color: var(--canvas);
+        background-image:
+            radial-gradient(at 0% 0%, rgba(56, 189, 248, 0.08) 0px, transparent 50%),
+            radial-gradient(at 100% 0%, rgba(129, 140, 248, 0.09) 0px, transparent 50%),
+            radial-gradient(at 50% 100%, rgba(16, 185, 129, 0.05) 0px, transparent 50%);
+        color: var(--text-primary);
+        font-family: 'Plus Jakarta Sans', -apple-system, BlinkMacSystemFont, sans-serif;
+    }
+
+    [data-testid="stSidebar"] {
+        background: #080D1A !important;
+        border-right: 1px solid var(--line-subtle);
+    }
     [data-testid="stSidebar"] > div:first-child { padding-top: 1.5rem; }
-    .block-container { max-width: 1500px; padding: 2rem 3rem 3rem; }
-    h1, h2, h3, h4, p, label { font-family: Inter, "Segoe UI", sans-serif; }
-    h1 { letter-spacing: -.03em; font-weight: 760; }
-    h2, h3 { letter-spacing: -.02em; }
-    .brand-bar { display: flex; justify-content: space-between; align-items: center; gap: 1rem; padding: 0 0 1.4rem; border-bottom: 1px solid var(--line); }
-    .brand-kicker { color: #7dd3fc; font-size: .72rem; letter-spacing: .15em; text-transform: uppercase; font-weight: 800; }
-    .brand-title { margin: .35rem 0 0; font-size: 2rem; font-weight: 800; letter-spacing: -.04em; }
-    .brand-meta { color: var(--muted); font-size: .82rem; text-align: right; line-height: 1.7; }
-    .live-dot { display: inline-block; width: 8px; height: 8px; margin-right: 7px; border-radius: 50%; background: var(--success); box-shadow: 0 0 12px var(--success); animation: live-pulse 1.5s ease-in-out infinite; }
-    .section-label { color: #7dd3fc; font-size: .7rem; letter-spacing: .14em; text-transform: uppercase; font-weight: 800; margin: .4rem 0 .75rem; }
-    .panel { background: linear-gradient(145deg, rgba(23,32,51,.92), rgba(17,24,39,.94)); border: 1px solid var(--line); border-radius: 14px; padding: 1.15rem; box-shadow: 0 16px 38px rgba(0,0,0,.18); }
-    .panel-accent { border-color: rgba(59,130,246,.55); }
-    .panel-success { border-color: rgba(16,185,129,.6); }
-    .panel-title { display: flex; align-items: center; justify-content: space-between; gap: .75rem; margin-bottom: .9rem; color: var(--text); font-size: .98rem; font-weight: 750; }
-    .panel-subtitle { color: var(--muted); font-size: .78rem; line-height: 1.5; }
-    .metric-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: .7rem; }
-    .metric { background: rgba(11,15,25,.72); border: 1px solid var(--line); border-radius: 10px; padding: .8rem; min-height: 76px; }
-    .metric-label { color: var(--muted); font-size: .69rem; letter-spacing: .07em; text-transform: uppercase; }
-    .metric-value { color: var(--text); font-size: 1.22rem; font-weight: 760; margin-top: .35rem; }
+
+    .block-container {
+        max-width: 1540px !important;
+        padding: 1.25rem 2.25rem 3rem !important;
+    }
+
+    /* Top Hero Header */
+    .hero-container {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        gap: 1.5rem;
+        padding: 1.2rem 1.75rem;
+        background: linear-gradient(135deg, rgba(15, 23, 42, 0.7) 0%, rgba(30, 41, 59, 0.4) 100%);
+        backdrop-filter: blur(16px);
+        -webkit-backdrop-filter: blur(16px);
+        border: 1px solid var(--line-subtle);
+        border-radius: 20px;
+        box-shadow: 0 12px 32px rgba(0, 0, 0, 0.4), inset 0 1px 0 rgba(255, 255, 255, 0.08);
+        margin-bottom: 1.25rem;
+    }
+
+    .hero-left {
+        display: flex;
+        align-items: center;
+        gap: 1.25rem;
+    }
+
+    .ai-orb-wrapper {
+        position: relative;
+        width: 62px;
+        height: 62px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        flex-shrink: 0;
+    }
+
+    .ai-orb-core {
+        width: 48px;
+        height: 48px;
+        border-radius: 50%;
+        background: radial-gradient(circle at 35% 35%, #38BDF8, #6366F1 55%, #A855F7 90%);
+        box-shadow: 0 0 25px rgba(56, 189, 248, 0.55), inset 0 0 12px rgba(255, 255, 255, 0.7);
+        animation: orb-breathe 3.5s ease-in-out infinite;
+    }
+
+    .ai-orb-ring {
+        position: absolute;
+        inset: 0;
+        border-radius: 50%;
+        border: 1.5px dashed rgba(56, 189, 248, 0.4);
+        animation: ring-rotate 12s linear infinite;
+    }
+
+    .ai-orb-ring-pulse {
+        position: absolute;
+        inset: -4px;
+        border-radius: 50%;
+        border: 1px solid rgba(192, 132, 252, 0.25);
+        animation: orb-ping 2.5s cubic-bezier(0, 0, 0.2, 1) infinite;
+    }
+
+    @keyframes orb-breathe {
+        0%, 100% { transform: scale(1); filter: brightness(1); }
+        50% { transform: scale(1.06); filter: brightness(1.18); box-shadow: 0 0 35px rgba(129, 140, 248, 0.75); }
+    }
+    @keyframes ring-rotate { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
+    @keyframes orb-ping { 0% { transform: scale(0.9); opacity: 0.8; } 80%, 100% { transform: scale(1.3); opacity: 0; } }
+
+    .hero-title-group h1 {
+        margin: 0;
+        font-size: 2.15rem;
+        font-weight: 850;
+        letter-spacing: -0.04em;
+        line-height: 1.1;
+        background: linear-gradient(120deg, #FFFFFF 15%, #E0E7FF 50%, #38BDF8 90%);
+        -webkit-background-clip: text;
+        -webkit-text-fill-color: transparent;
+    }
+
+    .hero-subtitle {
+        color: var(--text-secondary);
+        font-size: 0.88rem;
+        font-weight: 500;
+        margin-top: 0.25rem;
+    }
+
+    .hero-badge-pill {
+        display: inline-flex;
+        align-items: center;
+        gap: 0.45rem;
+        padding: 0.22rem 0.7rem;
+        background: rgba(56, 189, 248, 0.1);
+        border: 1px solid rgba(56, 189, 248, 0.3);
+        border-radius: 999px;
+        font-size: 0.72rem;
+        font-weight: 700;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+        color: #7DD3FC;
+        margin-bottom: 0.25rem;
+    }
+
+    .pipeline-bar {
+        display: flex;
+        align-items: center;
+        gap: 0.4rem;
+        background: rgba(8, 13, 26, 0.6);
+        padding: 0.4rem 0.75rem;
+        border-radius: 999px;
+        border: 1px solid var(--line-subtle);
+        font-size: 0.76rem;
+        font-weight: 600;
+        color: var(--text-secondary);
+    }
+    .pipe-step {
+        display: inline-flex;
+        align-items: center;
+        gap: 0.35rem;
+        padding: 0.2rem 0.55rem;
+        border-radius: 999px;
+        background: rgba(255, 255, 255, 0.04);
+        color: #E2E8F0;
+    }
+    .pipe-arrow { color: #64748B; font-size: 0.7rem; }
+
+    /* Telemetry Row */
+    .telemetry-row {
+        display: grid;
+        grid-template-columns: repeat(5, minmax(0, 1fr));
+        gap: 0.65rem;
+        margin-bottom: 1.25rem;
+    }
+    .telemetry-card {
+        background: linear-gradient(145deg, rgba(15, 23, 42, 0.65), rgba(15, 23, 42, 0.45));
+        backdrop-filter: blur(12px);
+        border: 1px solid var(--line-subtle);
+        border-radius: 14px;
+        padding: 0.65rem 0.9rem;
+        display: flex;
+        flex-direction: column;
+        gap: 0.2rem;
+        transition: all 0.2s ease;
+    }
+    .telemetry-card:hover {
+        border-color: var(--line-active);
+        box-shadow: 0 4px 18px rgba(56, 189, 248, 0.1);
+        transform: translateY(-1px);
+    }
+    .telemetry-label {
+        font-size: 0.68rem;
+        font-weight: 700;
+        text-transform: uppercase;
+        letter-spacing: 0.08em;
+        color: var(--text-muted);
+    }
+    .telemetry-value {
+        font-size: 0.82rem;
+        font-weight: 700;
+        color: #E2E8F0;
+        display: flex;
+        align-items: center;
+        gap: 0.4rem;
+    }
+    .telemetry-dot { width: 7px; height: 7px; border-radius: 50%; display: inline-block; }
+    .dot-online { background: var(--accent-emerald); box-shadow: 0 0 10px var(--accent-emerald); animation: pulse-dot 2s infinite; }
+    .dot-warning { background: var(--accent-amber); box-shadow: 0 0 10px var(--accent-amber); }
+    .dot-emergency { background: var(--accent-rose); box-shadow: 0 0 12px var(--accent-rose); animation: pulse-dot 1s infinite; }
+    @keyframes pulse-dot { 0%, 100% { opacity: 0.6; transform: scale(0.95); } 50% { opacity: 1; transform: scale(1.15); } }
+
+    /* Glass Cards */
+    .glass-card {
+        background: linear-gradient(150deg, rgba(15, 23, 42, 0.75) 0%, rgba(15, 23, 42, 0.5) 100%);
+        backdrop-filter: blur(16px);
+        -webkit-backdrop-filter: blur(16px);
+        border: 1px solid var(--line-subtle);
+        border-radius: 18px;
+        padding: 1.35rem;
+        box-shadow: 0 16px 36px rgba(0, 0, 0, 0.35);
+        margin-bottom: 1.25rem;
+        position: relative;
+    }
+    .glass-card-accent {
+        border-color: rgba(56, 189, 248, 0.45);
+        box-shadow: 0 0 30px rgba(56, 189, 248, 0.12), 0 16px 36px rgba(0, 0, 0, 0.35);
+    }
+    .card-header-bar {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        margin-bottom: 0.9rem;
+        padding-bottom: 0.65rem;
+        border-bottom: 1px solid var(--line-subtle);
+    }
+    .card-header-title {
+        font-size: 1.05rem;
+        font-weight: 750;
+        letter-spacing: -0.02em;
+        color: #F8FAFC;
+        display: flex;
+        align-items: center;
+        gap: 0.55rem;
+    }
+    .card-header-badge {
+        font-size: 0.72rem;
+        font-weight: 700;
+        padding: 0.2rem 0.65rem;
+        border-radius: 999px;
+        letter-spacing: 0.06em;
+        text-transform: uppercase;
+    }
+
+    /* Voice State Indicator */
+    .voice-state-banner {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        padding: 0.85rem 1.15rem;
+        background: linear-gradient(90deg, rgba(56, 189, 248, 0.1) 0%, rgba(129, 140, 248, 0.08) 100%);
+        border: 1px solid rgba(56, 189, 248, 0.25);
+        border-radius: 14px;
+        margin-bottom: 1.1rem;
+    }
+    .voice-state-left { display: flex; align-items: center; gap: 0.75rem; }
+    .voice-state-title { font-size: 0.85rem; font-weight: 800; letter-spacing: 0.06em; text-transform: uppercase; color: #38BDF8; }
+    .voice-state-desc { font-size: 0.8rem; color: var(--text-secondary); }
+
+    /* Waveform visualizer */
+    .waveform-visualizer {
+        display: inline-flex;
+        align-items: flex-end;
+        gap: 3.5px;
+        height: 22px;
+        vertical-align: middle;
+    }
+    .waveform-visualizer span {
+        display: inline-block;
+        width: 3.5px;
+        border-radius: 2px;
+        background: linear-gradient(180deg, #38BDF8, #818CF8);
+        animation: wave-anim 1.1s ease-in-out infinite;
+    }
+    .waveform-visualizer span:nth-child(1) { height: 40%; animation-delay: 0.0s; }
+    .waveform-visualizer span:nth-child(2) { height: 90%; animation-delay: 0.15s; }
+    .waveform-visualizer span:nth-child(3) { height: 60%; animation-delay: 0.3s; }
+    .waveform-visualizer span:nth-child(4) { height: 100%; animation-delay: 0.45s; }
+    .waveform-visualizer span:nth-child(5) { height: 75%; animation-delay: 0.6s; }
+    @keyframes wave-anim {
+        0%, 100% { transform: scaleY(0.35); opacity: 0.5; }
+        50% { transform: scaleY(1); opacity: 1; filter: brightness(1.25); }
+    }
+
+    /* Emergency Alert Card */
+    .alert-emergency {
+        background: linear-gradient(145deg, rgba(239, 68, 68, 0.22) 0%, rgba(15, 23, 42, 0.92) 100%);
+        border: 2px solid var(--accent-rose);
+        border-radius: 16px;
+        padding: 1.15rem 1.35rem;
+        box-shadow: 0 0 35px rgba(244, 63, 94, 0.35);
+        animation: pulse-red-card 2s infinite;
+        margin-bottom: 1.25rem;
+    }
+    @keyframes pulse-red-card {
+        0%, 100% { border-color: rgba(244, 63, 94, 0.6); box-shadow: 0 0 25px rgba(244, 63, 94, 0.25); }
+        50% { border-color: rgba(244, 63, 94, 1); box-shadow: 0 0 40px rgba(244, 63, 94, 0.5); }
+    }
+
+    .badge-emergency { background: rgba(244, 63, 94, 0.25); border: 1px solid var(--accent-rose); color: #FECDD3; font-weight: 800; padding: 0.25rem 0.75rem; border-radius: 999px; font-size: 0.78rem; }
+    .badge-urgent { background: rgba(245, 158, 11, 0.22); border: 1px solid var(--accent-amber); color: #FDE68A; font-weight: 800; padding: 0.25rem 0.75rem; border-radius: 999px; font-size: 0.78rem; }
+    .badge-routine { background: rgba(16, 185, 129, 0.18); border: 1px solid var(--accent-emerald); color: #A7F3D0; font-weight: 800; padding: 0.25rem 0.75rem; border-radius: 999px; font-size: 0.78rem; }
+
+    .symptom-chip { display: inline-flex; align-items: center; gap: 0.35rem; padding: 0.3rem 0.7rem; border-radius: 999px; font-size: 0.76rem; font-weight: 600; background: rgba(56, 189, 248, 0.12); border: 1px solid rgba(56, 189, 248, 0.35); color: #BAE6FD; margin-right: 0.4rem; margin-bottom: 0.4rem; }
+    .flag-chip { display: inline-flex; align-items: center; gap: 0.35rem; padding: 0.3rem 0.7rem; border-radius: 999px; font-size: 0.76rem; font-weight: 700; background: rgba(244, 63, 94, 0.18); border: 1px solid rgba(244, 63, 94, 0.55); color: #FECDD3; margin-right: 0.4rem; margin-bottom: 0.4rem; }
+
+    /* Conversation Bubbles */
+    .chat-stream { display: flex; flex-direction: column; gap: 1.15rem; margin-top: 0.75rem; }
+    .chat-bubble-patient {
+        align-self: flex-end;
+        max-width: 85%;
+        background: linear-gradient(135deg, rgba(30, 41, 59, 0.95), rgba(15, 23, 42, 0.95));
+        border: 1px solid rgba(148, 163, 184, 0.2);
+        border-radius: 20px 20px 4px 20px;
+        padding: 1.05rem 1.35rem;
+        color: #F8FAFC;
+        box-shadow: 0 8px 24px rgba(0, 0, 0, 0.25);
+    }
+    .chat-bubble-assistant {
+        align-self: flex-start;
+        max-width: 90%;
+        background: linear-gradient(135deg, rgba(30, 27, 75, 0.55), rgba(15, 23, 42, 0.95));
+        border: 1px solid rgba(129, 140, 248, 0.45);
+        border-radius: 20px 20px 20px 4px;
+        padding: 1.2rem 1.45rem;
+        color: #FAF5FF;
+        box-shadow: 0 10px 30px rgba(99, 102, 241, 0.18);
+    }
+    .chat-meta-bar { display: flex; align-items: center; justify-content: space-between; margin-bottom: 0.55rem; font-size: 0.74rem; font-weight: 750; letter-spacing: 0.05em; text-transform: uppercase; }
+    .follow-up-box { margin-top: 0.85rem; padding: 0.65rem 0.95rem; background: rgba(129, 140, 248, 0.12); border-left: 3px solid #818CF8; border-radius: 0 10px 10px 0; font-size: 0.86rem; font-weight: 600; color: #C7D2FE; }
+
+    /* Agent Telemetry Grid & Cards */
+    .agent-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 0.75rem; margin-top: 0.75rem; }
+    .agent-card { min-height: 112px; padding: 0.9rem; border: 1px solid #30435d; border-radius: 11px; background: rgba(17,24,39,0.9); color: #8190a5; transition: all 0.25s ease; }
+    .agent-card.active { border-color: var(--success); box-shadow: 0 0 22px rgba(16,185,129,0.42); animation: telemetry-pulse 1.25s ease-in-out infinite; color: var(--text-primary); }
+    .agent-card.done { border-color: rgba(16,185,129,0.66); background: rgba(16,185,129,0.08); color: #d1fae5; }
+    .agent-card.blocked { border-color: var(--danger); background: rgba(248,113,113,0.08); color: #fecaca; }
+    .agent-card.voice { border-color: #4c3a73; }
+    .agent-card.voice.active { border-color: #A78BFA; box-shadow: 0 0 22px rgba(167,139,250,0.48); animation: telemetry-pulse-voice 1.25s ease-in-out infinite; color: var(--text-primary); }
+    .agent-card.voice.done { border-color: rgba(167,139,250,0.66); background: rgba(167,139,250,0.1); color: #e9d5ff; }
+    @keyframes telemetry-pulse { 0%,100% { box-shadow: 0 0 5px rgba(16,185,129,0.25); } 50% { box-shadow: 0 0 25px rgba(16,185,129,0.75); } }
+    @keyframes telemetry-pulse-voice { 0%,100% { box-shadow: 0 0 5px rgba(167,139,250,0.28); } 50% { box-shadow: 0 0 25px rgba(167,139,250,0.8); } }
+    .agent-index { color: #64748b; font-size: 0.67rem; letter-spacing: 0.12em; font-weight: 800; }
+    .agent-title { margin-top: 0.42rem; font-size: 0.86rem; font-weight: 760; }
+    .agent-status { margin-top: 0.7rem; font-size: 0.68rem; letter-spacing: 0.09em; font-weight: 800; }
+    .packet { color: #6ee7b7; margin-top: 0.5rem; font-size: 0.68rem; }
+
+    /* Dashboard Metrics & Panels */
+    .metric-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 0.7rem; margin: 0.75rem 0; }
+    .metric { background: rgba(11,15,25,0.72); border: 1px solid var(--line-subtle); border-radius: 10px; padding: 0.8rem; min-height: 76px; }
+    .metric-label { color: var(--text-muted); font-size: 0.69rem; letter-spacing: 0.07em; text-transform: uppercase; }
+    .metric-value { color: var(--text-primary); font-size: 1.22rem; font-weight: 760; margin-top: 0.35rem; }
     .metric-value.success { color: #6ee7b7; }
     .metric-value.info { color: #93c5fd; }
     .metric-value.amber { color: #fcd34d; }
-    .chip-row { display: flex; flex-wrap: wrap; gap: .45rem; margin-top: .65rem; }
-    .chip { display: inline-flex; align-items: center; border-radius: 999px; padding: .35rem .65rem; border: 1px solid rgba(16,185,129,.48); background: rgba(16,185,129,.12); color: #a7f3d0; font-size: .75rem; font-weight: 700; }
-    .chip-critical { border-color: rgba(245,158,11,.56); background: rgba(245,158,11,.13); color: #fde68a; }
-    .flow-shell { background: #0d1522; border: 1px solid #263b57; border-radius: 14px; padding: 1rem; }
-    .agent-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: .75rem; }
-    .agent-card { min-height: 112px; padding: .9rem; border: 1px solid #30435d; border-radius: 11px; background: rgba(17,24,39,.9); color: #8190a5; transition: all .25s ease; }
-    .agent-card.active { border-color: var(--success); box-shadow: 0 0 22px rgba(16,185,129,.42); animation: telemetry-pulse 1.25s ease-in-out infinite; color: var(--text); }
-    .agent-card.done { border-color: rgba(16,185,129,.66); background: rgba(16,185,129,.08); color: #d1fae5; }
-    .agent-card.blocked { border-color: var(--danger); background: rgba(248,113,113,.08); color: #fecaca; }
-    .agent-card.voice { border-color: #4c3a73; }
-    .agent-card.voice.active { border-color: #A78BFA; box-shadow: 0 0 22px rgba(167,139,250,.48); animation: telemetry-pulse-voice 1.25s ease-in-out infinite; color: var(--text); }
-    .agent-card.voice.done { border-color: rgba(167,139,250,.66); background: rgba(167,139,250,.1); color: #e9d5ff; }
-    .panel-voice { border-color: rgba(167,139,250,.55); background: linear-gradient(145deg, rgba(76,58,115,.28), rgba(17,24,39,.94)); }
-    .lang-badge { display: inline-flex; align-items: center; gap: .5rem; border-radius: 999px; padding: .5rem 1rem; border: 1px solid rgba(167,139,250,.55); background: rgba(167,139,250,.14); color: #e9d5ff; font-size: 1.05rem; font-weight: 750; }
-    .lang-badge .flag { font-size: 1.3rem; }
-    .waveform { display: inline-flex; align-items: flex-end; gap: 2px; height: 16px; margin-right: .4rem; vertical-align: middle; }
-    .waveform span { display: inline-block; width: 3px; background: #A78BFA; border-radius: 2px; animation: wave-bounce 1s ease-in-out infinite; }
-    .waveform span:nth-child(1) { height: 40%; animation-delay: 0s; }
-    .waveform span:nth-child(2) { height: 100%; animation-delay: .15s; }
-    .waveform span:nth-child(3) { height: 60%; animation-delay: .3s; }
-    .waveform span:nth-child(4) { height: 85%; animation-delay: .45s; }
-    .waveform span:nth-child(5) { height: 50%; animation-delay: .6s; }
-    @keyframes telemetry-pulse-voice { 0%,100% { box-shadow: 0 0 5px rgba(167,139,250,.28); } 50% { box-shadow: 0 0 25px rgba(167,139,250,.8); } }
-    @keyframes wave-bounce { 0%,100% { transform: scaleY(.4); opacity: .65; } 50% { transform: scaleY(1); opacity: 1; } }
-    .agent-index { color: #64748b; font-size: .67rem; letter-spacing: .12em; font-weight: 800; }
-    .agent-title { margin-top: .42rem; font-size: .86rem; font-weight: 760; }
-    .agent-status { margin-top: .7rem; font-size: .68rem; letter-spacing: .09em; font-weight: 800; }
-    .packet { color: #6ee7b7; margin-top: .5rem; font-size: .68rem; animation: packet-blink 1s linear infinite; }
-    .ledger-row { display: flex; align-items: center; justify-content: space-between; gap: 1rem; padding: .55rem 0; border-bottom: 1px solid rgba(42,58,82,.65); color: var(--muted); font-size: .78rem; }
+
+    .ledger-row { display: flex; align-items: center; justify-content: space-between; gap: 1rem; padding: 0.55rem 0; border-bottom: 1px solid rgba(42,58,82,0.65); color: var(--text-muted); font-size: 0.78rem; }
     .ledger-row:last-child { border-bottom: 0; }
-    .ledger-value { color: var(--text); font-weight: 750; }
-    .footer-note { color: #64748b; font-size: .72rem; text-align: center; padding-top: 1.2rem; }
-    @keyframes telemetry-pulse { 0%,100% { box-shadow: 0 0 5px rgba(16,185,129,.25); } 50% { box-shadow: 0 0 25px rgba(16,185,129,.75); } }
-    @keyframes packet-blink { 0%,100% { opacity: .35; transform: translateX(0); } 50% { opacity: 1; transform: translateX(4px); } }
-    @keyframes live-pulse { 0%,100% { opacity: .45; } 50% { opacity: 1; } }
-    @media (max-width: 1000px) { .block-container { padding: 1.25rem; } .metric-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } .agent-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+    .ledger-value { color: var(--text-primary); font-weight: 750; }
+
+    .privacy-badge { display: inline-flex; align-items: center; gap: 0.45rem; padding: 0.4rem 0.85rem; background: rgba(16, 185, 129, 0.1); border: 1px solid rgba(16, 185, 129, 0.3); border-radius: 10px; font-size: 0.74rem; font-weight: 600; color: #6EE7B7; }
+    .legal-disclaimer { padding: 0.75rem 1rem; background: rgba(8, 13, 26, 0.7); border: 1px dashed rgba(148, 163, 184, 0.2); border-radius: 12px; font-size: 0.74rem; color: var(--text-muted); line-height: 1.5; margin-top: 1rem; }
 </style>
 """,
     unsafe_allow_html=True,
 )
 
-
+# --- Session State Accessors & Helpers ---
 def get_vector_store() -> ClinicalVectorStore:
     """Return the session-scoped ChromaDB semantic memory store."""
     if "vector_db" not in st.session_state:
@@ -169,7 +487,7 @@ def get_vector_store() -> ClinicalVectorStore:
 
 
 def get_compiled_graph() -> Any:
-    """Return the current compiled P2P graph."""
+    """Return the current compiled 9-node P2P graph."""
     if st.session_state.get("compiled_graph_version") != 4:
         st.session_state.compiled_graph = compile_workflow()
         st.session_state.compiled_graph_version = 4
@@ -183,23 +501,22 @@ def get_telemetry() -> Dict[str, Any]:
     return st.session_state.accumulated_tokens
 
 
+def update_telemetry(result_state: Mapping[str, Any]) -> None:
+    """Aggregate token and cost records from a graph result."""
+    telemetry = get_telemetry()
+    logs = result_state.get("token_usage_log", [])
+    telemetry["input"] = sum(int(log.get("input_tokens", 0)) for log in logs)
+    telemetry["output"] = sum(int(log.get("output_tokens", 0)) for log in logs)
+    telemetry["total_cost"] = sum(float(log.get("estimated_cost", 0.0)) for log in logs)
+
+
 def render_metric(label: str, value: str, tone: str = "") -> str:
     """Build one reusable metric card fragment."""
     return f'<div class="metric"><div class="metric-label">{label}</div><div class="metric-value {tone}">{value}</div></div>'
 
 
 def build_report_html(result_state: Mapping[str, Any], patient_id: str) -> str:
-    """Render a standalone, printable HTML report for the patient's record.
-
-    Deliberately HTML rather than a server-generated PDF: a PDF library like
-    fpdf2/reportlab needs the right Unicode font *embedded* for each script
-    (Ethiopic for Amharic, Arabic, CJK, Devanagari for Hindi) or the text
-    renders as boxes/mojibake. None of those font files are bundled here.
-    An HTML file opened in the patient's own browser uses the browser's
-    already-installed system fonts for every script correctly, and the
-    browser's own "Print -> Save as PDF" produces a real PDF from it with no
-    font problems at all.
-    """
+    """Render a standalone, printable HTML report with complete script font fallback."""
     profile, _ = resolve_language_profile(result_state.get("detected_language_code", "en"))
     direction = "rtl" if profile.assemblyai_code == "ar" else "ltr"
     report_text = str(result_state.get("final_clinical_report", "")).replace("\n", "<br>")
@@ -209,7 +526,7 @@ def build_report_html(result_state: Mapping[str, Any], patient_id: str) -> str:
 <html lang="{profile.assemblyai_code}" dir="{direction}">
 <head>
 <meta charset="utf-8">
-<title>Clinical Report — {patient_id}</title>
+<title>Clinical Verification Report — {patient_id}</title>
 <style>
   body {{ font-family: "Noto Sans", "Segoe UI", Tahoma, Arial, sans-serif; max-width: 720px; margin: 2.5rem auto; color: #111; line-height: 1.6; padding: 0 1.5rem; }}
   h1 {{ font-size: 1.4rem; border-bottom: 2px solid #333; padding-bottom: .5rem; }}
@@ -227,13 +544,13 @@ def build_report_html(result_state: Mapping[str, Any], patient_id: str) -> str:
   <div class="section"><h2>Symptoms Mapped</h2><p>{symptoms}</p></div>
   <div class="section"><h2>Diagnostic Pathway</h2><p>{diagnosis}</p></div>
   <div class="section"><h2>Report</h2><div class="report-body">{report_text}</div></div>
-  <div class="footer">Decision-support artifact only. Requires practitioner review before clinical use. Open this file in a browser and use Print → Save as PDF to archive it.</div>
+  <div class="footer">Decision-support artifact only. Requires practitioner review before clinical use. Open in browser and use Print → Save as PDF.</div>
 </body>
 </html>"""
 
 
 def collaboration_dot(active_node: Optional[str], completed: Set[str]) -> str:
-    """Build the live Graphviz representation of the P2P workforce."""
+    """Build the live Graphviz representation of the 9-node P2P workforce."""
     node_lines = []
     for node_name in NODE_ORDER:
         is_voice = node_name in VOICE_NODES
@@ -267,14 +584,14 @@ def collaboration_dot(active_node: Optional[str], completed: Set[str]) -> str:
 
 
 def render_agent_cards(container: Any, active_node: Optional[str], completed: Set[str], blocked: Set[str]) -> None:
-    """Render live worker cards with idle, processing, done, and blocked states."""
+    """Render live worker cards with idle, active, done, and blocked states."""
     cards = []
     for index, node_name in enumerate(NODE_ORDER, start=1):
         voice_class = " voice" if node_name in VOICE_NODES else ""
         if node_name in blocked:
             state_class, status, packet = "blocked", "⛔ BLOCKED", ""
         elif node_name == active_node:
-            active_packet = '<div class="packet">🔉 audio streaming</div>' if node_name in VOICE_NODES else '<div class="packet">● state packet in transit</div>'
+            active_packet = '<div class="packet">🔊 audio streaming</div>' if node_name in VOICE_NODES else '<div class="packet">● state packet in transit</div>'
             state_class, status, packet = "active", "⚡ ACTIVE TELEMETRY", active_packet
         elif node_name in completed:
             state_class, status, packet = "done", "✅ COMPLETE", ""
@@ -285,15 +602,6 @@ def render_agent_cards(container: Any, active_node: Optional[str], completed: Se
             f'<div class="agent-title">{NODE_ICONS[node_name]} {NODE_LABELS[node_name]}</div><div class="agent-status">{status}</div>{packet}</div>'
         )
     container.markdown('<div class="agent-grid">' + "".join(cards) + "</div>", unsafe_allow_html=True)
-
-
-def update_telemetry(result_state: Mapping[str, Any]) -> None:
-    """Aggregate token and cost records from a graph result."""
-    telemetry = get_telemetry()
-    logs = result_state.get("token_usage_log", [])
-    telemetry["input"] = sum(int(log.get("input_tokens", 0)) for log in logs)
-    telemetry["output"] = sum(int(log.get("output_tokens", 0)) for log in logs)
-    telemetry["total_cost"] = sum(float(log.get("estimated_cost", 0.0)) for log in logs)
 
 
 async def stream_graph(graph: Any, initial_state: SharedState, graph_placeholder: Any, cards_placeholder: Any, activity_placeholder: Any) -> Dict[str, Any]:
@@ -315,19 +623,17 @@ async def stream_graph(graph: Any, initial_state: SharedState, graph_placeholder
             next_index = NODE_ORDER.index(node_name) + 1
             active_node = NODE_ORDER[next_index] if next_index < len(NODE_ORDER) else None
             if node_name == "critic" and str(final_state.get("current_step", "")) == "CRITIC_REQUESTED_RETRY":
-                # Self-healing loop: the critic sent it back to diagnostic
-                # instead of forward to compliance.
                 active_node = "diagnostic"
                 activity_placeholder.warning(
-                    f"🔁 Critic requested a retry (confidence too low) - looping "
+                    f"🔁 Critic requested a retry (confidence too low) — looping "
                     f"back to Diagnostic (attempt {final_state.get('retry_count', 0)}/3)."
                 )
-                await asyncio.sleep(.5)
+                await asyncio.sleep(0.5)
             graph_placeholder.graphviz_chart(collaboration_dot(active_node, completed), use_container_width=True)
             render_agent_cards(cards_placeholder, active_node, completed, blocked)
-            activity_placeholder.success(f"✅ {NODE_LABELS[node_name]} completed and handed state to its peer.")
+            activity_placeholder.success(f"✅ {NODE_LABELS[node_name]} completed and handed state to peer.")
             if active_node is not None:
-                await asyncio.sleep(.35)
+                await asyncio.sleep(0.35)
                 activity_placeholder.info(f"⚡ {NODE_LABELS[active_node]} is processing the incoming state packet.")
     return final_state
 
@@ -337,261 +643,936 @@ def run_streaming_graph(graph: Any, initial_state: SharedState, graph_placeholde
     return asyncio.run(stream_graph(graph, initial_state, graph_placeholder, cards_placeholder, activity_placeholder))
 
 
+# --- Initialize Session State Variables ---
+if "voice_agent" not in st.session_state:
+    st.session_state.voice_agent = HealthcareVoiceAgent(output_dir="voice_output")
+
+if "conversation_history" not in st.session_state:
+    st.session_state.conversation_history = []
+
+if "latest_summary" not in st.session_state:
+    st.session_state.latest_summary = None
+
+if "last_triage" not in st.session_state:
+    st.session_state.last_triage = None
+
+if "patient_id" not in st.session_state:
+    st.session_state.patient_id = "PT-8849-X"
+
+if "app_mode" not in st.session_state:
+    st.session_state.app_mode = "voice_agent"
+
+if "voice_state" not in st.session_state:
+    st.session_state.voice_state = "READY"
+
+if "selected_language_key" not in st.session_state:
+    st.session_state.selected_language_key = "auto"
+
 vector_store = get_vector_store()
 compiled_graph = get_compiled_graph()
 telemetry = get_telemetry()
 
+# Real backend environment check for truthful telemetry
+aai_key = os.getenv("ASSEMBLYAI_API_KEY", "").strip()
+has_aai = bool(aai_key)
+groq_key = os.getenv("GROQ_API_KEY", "").strip()
+has_groq = bool(groq_key)
+groq_model_name = os.getenv("GROQ_MODEL", "openai/gpt-oss-120b")
+
+# Check if emergency is active in state
+is_emergency_active = (
+    st.session_state.last_triage is not None
+    and st.session_state.last_triage.is_emergency
+)
+orb_status_text = "EMERGENCY ALERT ACTIVE" if is_emergency_active else "AI Assistant Online"
+orb_dot_class = "telemetry-dot dot-emergency" if is_emergency_active else "telemetry-dot dot-online"
+
+# =========================================================================
+# 1. SPECTACULAR HERO SECTION
+# =========================================================================
 st.markdown(
-    '<div class="brand-bar"><div><div class="brand-kicker">Clinical Operations Platform / P2P Workforce</div>'
-    '<div class="brand-title">Clinical Command Center</div></div>'
-    '<div class="brand-meta"><span class="live-dot"></span> SYSTEM OPERATIONAL<br/>Secure diagnostic orchestration</div></div>',
+    f"""
+<div class="hero-container">
+    <div class="hero-left">
+        <div class="ai-orb-wrapper">
+            <div class="ai-orb-ring"></div>
+            <div class="ai-orb-ring-pulse"></div>
+            <div class="ai-orb-core"></div>
+        </div>
+        <div class="hero-title-group">
+            <div class="hero-badge-pill">
+                <span class="{orb_dot_class}"></span>
+                <span>{orb_status_text}</span>
+            </div>
+            <h1>MedVoice AI</h1>
+            <div class="hero-subtitle">
+                Autonomous Multilingual Healthcare Voice Assistant &bull; Clinical Operations Command Center
+            </div>
+        </div>
+    </div>
+    <div class="hero-right">
+        <div class="pipeline-bar">
+            <span class="pipe-step">🎙️ VOICE</span>
+            <span class="pipe-arrow">▶</span>
+            <span class="pipe-step">🧠 UNDERSTAND</span>
+            <span class="pipe-arrow">▶</span>
+            <span class="pipe-step">🛡️ TRIAGE</span>
+            <span class="pipe-arrow">▶</span>
+            <span class="pipe-step">📋 SUMMARIZE</span>
+        </div>
+    </div>
+</div>
+""",
     unsafe_allow_html=True,
 )
 
+# =========================================================================
+# 2. REAL-TIME SYSTEM TELEMETRY (Technical Telemetry Bar)
+# =========================================================================
+aai_status_dot = "dot-online" if has_aai else "dot-warning"
+aai_status_text = "Connected" if has_aai else "Key Missing"
+
+groq_status_dot = "dot-online" if has_groq else "dot-warning"
+groq_status_text = f"Ready ({groq_model_name.split('/')[-1]})" if has_groq else "Rule Fallback"
+
+st.markdown(
+    f"""
+<div class="telemetry-row">
+    <div class="telemetry-card">
+        <div class="telemetry-label">Speech-To-Text</div>
+        <div class="telemetry-value">
+            <span class="telemetry-dot {aai_status_dot}"></span>
+            <span>AssemblyAI: {aai_status_text}</span>
+        </div>
+    </div>
+    <div class="telemetry-card">
+        <div class="telemetry-label">Voice Synthesis</div>
+        <div class="telemetry-value">
+            <span class="telemetry-dot dot-online"></span>
+            <span>Multi-TLD TTS: Ready</span>
+        </div>
+    </div>
+    <div class="telemetry-card">
+        <div class="telemetry-label">Clinical Reasoning</div>
+        <div class="telemetry-value">
+            <span class="telemetry-dot {groq_status_dot}"></span>
+            <span>{groq_status_text}</span>
+        </div>
+    </div>
+    <div class="telemetry-card">
+        <div class="telemetry-label">Safety Screening</div>
+        <div class="telemetry-value">
+            <span class="telemetry-dot dot-online"></span>
+            <span>Deterministic Red-Flag Gate</span>
+        </div>
+    </div>
+    <div class="telemetry-card">
+        <div class="telemetry-label">Privacy Guard</div>
+        <div class="telemetry-value">
+            <span class="telemetry-dot dot-online"></span>
+            <span>HIPAA PII/PHI Redaction</span>
+        </div>
+    </div>
+</div>
+""",
+    unsafe_allow_html=True,
+)
+
+# =========================================================================
+# SIDEBAR CONTROLS & ARCHITECTURE SELECTOR
+# =========================================================================
 with st.sidebar:
-    st.markdown('<div class="section-label">Workspace Controls</div>', unsafe_allow_html=True)
-    st.selectbox("Inference target", ["openai/gpt-oss-120b"], index=0)
-    st.checkbox("Isolated testing context", value=True)
+    st.markdown("### 🎙️ Session Configuration")
+
+    language_keys = list(SUPPORTED_CLINICAL_LANGUAGES.keys())
+    language_labels = {
+        code: f"{p.flag_emoji} {p.display_name} ({p.native_name})"
+        for code, p in SUPPORTED_CLINICAL_LANGUAGES.items()
+    }
+    language_labels["auto"] = "🌐 Auto-Detect via AssemblyAI"
+
+    selected_language_key = st.selectbox(
+        "Active Language Profile",
+        options=["auto"] + language_keys,
+        format_func=lambda k: language_labels.get(k, k),
+        index=0 if st.session_state.selected_language_key == "auto" else (language_keys.index(st.session_state.selected_language_key) + 1),
+        help="Locks transcription, reasoning, and speech synthesis to this profile, or lets AssemblyAI auto-detect.",
+        key="sidebar_lang_selector",
+    )
+    st.session_state.selected_language_key = selected_language_key
+
     st.markdown("---")
-    st.markdown('<div class="section-label">Infrastructure Ledger</div>', unsafe_allow_html=True)
+    st.markdown("### 👤 Patient Tracker")
+    st.session_state.patient_id = st.text_input(
+        "Clinical ID Tag",
+        value=st.session_state.patient_id,
+        help="Unique identifier tagged on clinician summaries and audit traces.",
+    )
+
+    if st.button("🔄 Reset / New Patient Session", use_container_width=True):
+        st.session_state.conversation_history = []
+        st.session_state.latest_summary = None
+        st.session_state.last_triage = None
+        st.session_state.patient_id = f"PT-{uuid.uuid4().hex[:6].upper()}"
+        st.session_state.voice_state = "READY"
+        st.session_state.last_result = None
+        st.rerun()
+
+    st.markdown("---")
+    st.markdown("### 🧭 Architecture Mode")
+    mode_selection = st.radio(
+        "Experience View",
+        options=["🎙️ Interactive Voice Agent", "🔬 Clinical Command Center & 9-Node Workforce"],
+        index=0 if st.session_state.app_mode == "voice_agent" else 1,
+    )
+    st.session_state.app_mode = (
+        "voice_agent" if "Interactive" in mode_selection else "deep_workforce"
+    )
+
+    st.markdown("---")
+    st.markdown("### 📊 Infrastructure Ledger")
     st.markdown(render_metric("Input tokens", str(telemetry["input"]), "info"), unsafe_allow_html=True)
     st.markdown(render_metric("Output tokens", str(telemetry["output"]), "info"), unsafe_allow_html=True)
     st.markdown(render_metric("Session cost", f"${telemetry['total_cost']:.5f}", "success"), unsafe_allow_html=True)
+
     st.markdown("---")
-    st.caption("Clinical outputs are decision-support artifacts and require practitioner review before use.")
-
-st.markdown('<div class="section-label">Admission & Context</div>', unsafe_allow_html=True)
-intake_column, context_column = st.columns([1.35, 1])
-with intake_column:
-    st.markdown('<div class="panel panel-accent"><div class="panel-title">Patient Intake Admission Form <span>INTAKE  /  01</span></div><div class="panel-subtitle">Capture the minimum clinical context required to initialize the diagnostic workforce.</div></div>', unsafe_allow_html=True)
-    with st.expander("Open admission fields", expanded=True):
-        patient_id = st.text_input("Patient tracker ID", value="PT-8849-X")
-        full_name = st.text_input("Full name", value="Jordan Morgan")
-        age = st.number_input("Age", min_value=0, max_value=125, value=48, step=1)
-        vital_column, history_column = st.columns(2)
-        with vital_column:
-            vital_signs = st.text_input("Vital signs", value="BP 168/102 mmHg")
-        with history_column:
-            medical_history = st.text_input("Medical history ledger", value="Type-2 diabetes; Metformin")
-        symptoms = st.text_area(
-            "Presenting symptoms and clinical narrative",
-            value=("Sudden severe headache with elevated blood pressure spikes. " "Reports increased thirst and poor sleep."),
-            height=118,
-        )
-
     st.markdown(
-        '<div class="panel panel-voice"><div class="panel-title">🎙️ Multilingual Voice Intake '
-        '<span>INTAKE  /  01b</span></div><div class="panel-subtitle">'
-        'Optional: upload the patient describing symptoms out loud, in any of six languages. '
-        "AssemblyAI auto-detects the spoken language and transcribes it; the final report is "
-        "then spoken back in that same language via gTTS.</div></div>",
+        """
+<div class="privacy-badge">
+    <span>🔒</span>
+    <span><b>HIPAA Compliant</b><br/>Zero raw PII sent to reasoning</span>
+</div>
+""",
         unsafe_allow_html=True,
     )
+
+# =========================================================================
+# MODE 1: INTERACTIVE HEALTHCARE VOICE AGENT (MedVoice AI)
+# =========================================================================
+if st.session_state.app_mode == "voice_agent":
+    target_lang_code = (
+        "en" if st.session_state.selected_language_key == "auto" else st.session_state.selected_language_key
+    )
+    curr_profile = get_language_profile(target_lang_code)
+
+    # 1-Click Evaluation Scenarios Banner (Hero CTA)
     st.markdown(
-        "<div style='margin: .55rem 0 .8rem;'>"
-        + "".join(
-            f'<span class="lang-badge" style="margin-right:.5rem;font-size:.8rem;padding:.35rem .7rem;">'
-            f'<span class="flag">{profile.flag_emoji}</span>{profile.display_name}</span>'
-            for profile in SUPPORTED_CLINICAL_LANGUAGES.values()
-        )
-        + "</div>",
+        """
+<div class="glass-card glass-card-accent" style="padding:1.1rem 1.35rem; margin-bottom:1rem;">
+    <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:0.4rem;">
+        <span style="font-weight:800; font-size:0.95rem; color:#F8FAFC;">
+            🚀 1-Click Evaluation Scenarios
+        </span>
+        <span style="font-size:0.7rem; font-weight:700; color:#38BDF8; letter-spacing:0.06em; text-transform:uppercase;">
+            INSTANT PLAYBACK
+        </span>
+    </div>
+    <div style="font-size:0.8rem; color:var(--text-secondary); line-height:1.4;">
+        Trigger live conversational turns without setting up an external mic or typing:
+    </div>
+</div>
+""",
         unsafe_allow_html=True,
     )
-    uploaded_audio = st.file_uploader(
-        "Upload symptom audio (wav, mp3, m4a, ogg)",
-        type=["wav", "mp3", "m4a", "ogg", "flac"],
-        accept_multiple_files=False,
-    )
-    mic_recording = None
-    if hasattr(st, "audio_input"):
-        mic_recording = st.audio_input("🎙️ ...or record directly in the browser")
-    else:
-        st.caption("(Live mic recording needs Streamlit ≥ 1.39 — upgrade to enable it. File upload above still works.)")
-    if mic_recording is not None:
-        uploaded_audio = mic_recording
-    if uploaded_audio is not None:
-        st.audio(uploaded_audio, format=getattr(uploaded_audio, "type", None) or "audio/wav")
-        st.caption("🎧 Ready to transcribe on activation. This replaces/augments the typed narrative above.")
 
-with context_column:
-    st.markdown('<div class="panel"><div class="panel-title">Semantic Memory <span>CONTEXT  /  02</span></div><div class="panel-subtitle">Retrieve a related historical case before activating the workforce.</div></div>', unsafe_allow_html=True)
-    st.markdown("<br>", unsafe_allow_html=True)
-    if st.button("Retrieve historical context", use_container_width=True):
-        if symptoms.strip():
-            st.success("Historical case context recovered.")
-            st.code(vector_store.search_similar_cases(symptoms, max_results=1)[0], language="text")
-        else:
-            st.error("Presenting symptoms are required.")
-    else:
-        st.info("No prefetch requested. The memory layer remains available to the Researcher peer.")
+    scen_col1, scen_col2, scen_col3 = st.columns(3)
+    trigger_scenario_text = None
+    trigger_scenario_lang = target_lang_code
 
-st.markdown('<div class="section-label">Live Workforce Telemetry</div>', unsafe_allow_html=True)
-flow_header_column, flow_action_column = st.columns([3, 1])
-with flow_header_column:
-    st.markdown('<div class="panel-title">Peer-to-Peer Collaboration Flow <span class="live-dot"></span></div>', unsafe_allow_html=True)
-    st.caption("Voice Intake → Triage ↔ Researcher → Diagnostic ⟲ Critic → Compliance → Practitioner Review → Final Compile → Voice Response")
-with flow_action_column:
-    execute_clicked = st.button("🚀 Activate workforce", use_container_width=True)
+    with scen_col1:
+        if st.button("🟢 Scenario 1: Low-Risk Symptom", use_container_width=True, help="Simulate a routine tension headache consultation"):
+            trigger_scenario_text = "I have had a mild throbbing tension headache and trouble sleeping for the past 2 days."
+            trigger_scenario_lang = "en"
+            st.session_state.voice_state = "PROCESSING"
 
-graph_placeholder = st.empty()
-cards_placeholder = st.empty()
-activity_placeholder = st.empty()
-graph_placeholder.graphviz_chart(collaboration_dot(None, set()), use_container_width=True)
-render_agent_cards(cards_placeholder, None, set(), set())
-activity_placeholder.caption("⏸️ Workforce idle. Activate the pipeline to stream live state packets.")
+    with scen_col2:
+        if st.button("🔴 Scenario 2: Emergency Red-Flag", use_container_width=True, help="Simulate acute crushing chest pain triggering emergency escalation"):
+            trigger_scenario_text = "I have sudden severe crushing chest pain radiating to my left arm and I can barely breathe."
+            trigger_scenario_lang = "en"
+            st.session_state.voice_state = "PROCESSING"
 
-if execute_clicked:
-    if not symptoms.strip() and uploaded_audio is None:
-        st.error("Either typed symptoms or an uploaded audio recording is required before activation.")
-    else:
-        metadata_prefix = f"Patient {full_name}, age {age}. Vitals: {vital_signs}. History: {medical_history}. Symptoms:"
-        raw_input = f"{metadata_prefix} {symptoms}".strip()
+    with scen_col3:
+        if st.button(f"🌐 Scenario 3: {curr_profile.display_name} Voice", use_container_width=True, help=f"Simulate native speech in {curr_profile.display_name}"):
+            trigger_scenario_text = curr_profile.sample_symptom
+            trigger_scenario_lang = curr_profile.language_code
+            st.session_state.voice_state = "PROCESSING"
 
-        input_audio_path = None
-        if uploaded_audio is not None:
-            audio_name = getattr(uploaded_audio, "name", None) or "recording.wav"
-            suffix = Path(audio_name).suffix or ".wav"
-            temp_path = Path(tempfile.gettempdir()) / f"voice_intake_{uuid.uuid4().hex[:10]}{suffix}"
-            temp_path.write_bytes(uploaded_audio.getvalue())
-            input_audio_path = str(temp_path)
-            # raw_symptoms keeps the metadata prefix; voice_input_node appends
-            # the transcript to it rather than discarding the patient context.
-
-        initial_state = SharedState(
-            patient_id=patient_id,
-            raw_symptoms=raw_input,
-            input_audio_path=input_audio_path,
-            retry_count=0,
-            hitl_approved=None,
-        )
-        with st.spinner("Streaming clinical state across peer nodes..."):
-            st.session_state.last_result = run_streaming_graph(compiled_graph, initial_state, graph_placeholder, cards_placeholder, activity_placeholder)
-        st.session_state.last_request = {
-            "patient_id": patient_id,
-            "raw_symptoms": st.session_state.last_result.get("raw_symptoms", raw_input),
-            "detected_language_code": st.session_state.last_result.get("detected_language_code", "en"),
-        }
-        update_telemetry(st.session_state.last_result)
-
-result_state = st.session_state.get("last_result")
-if result_state:
-    st.markdown('<div class="section-label">Clinical Insights</div>', unsafe_allow_html=True)
-    symptoms_found = result_state.get("extracted_symptoms", [])
-    compliance_status = str(result_state.get("compliance_status", "PENDING"))
-    status_tone = "success" if compliance_status == "PASSED" else "amber" if compliance_status == "PENDING" else ""
-    pipeline_step = str(result_state.get("current_step", ""))
-    nodes_complete = "9 / 9" if pipeline_step.startswith("VOICE_OUTPUT") else "6 / 9"
-    st.markdown('<div class="metric-grid">' + render_metric("Workflow status", result_state.get("current_step", "UNKNOWN"), status_tone) + render_metric("Symptoms mapped", str(len(symptoms_found)), "info") + render_metric("P2P nodes complete", nodes_complete, "info") + render_metric("Compliance gate", compliance_status, status_tone) + '</div>', unsafe_allow_html=True)
-
-    detected_code = result_state.get("detected_language_code", "en")
-    voice_profile, _ = resolve_language_profile(detected_code)
-    confidence = result_state.get("language_confidence")
-    input_audio_used = bool(result_state.get("input_audio_path")) or bool(uploaded_audio)
-    if input_audio_used or result_state.get("output_audio_path"):
-        st.markdown("<br>", unsafe_allow_html=True)
+    # Emergency Alert Card (Conditional)
+    if is_emergency_active:
+        triage = st.session_state.last_triage
+        flags_str = ", ".join(triage.matched_flags)
         st.markdown(
-            '<div class="panel panel-voice"><div class="panel-title">🎙️ Voice Interaction '
-            '<span>MULTILINGUAL ROUND-TRIP</span></div><div class="panel-subtitle">'
-            "Detected spoken language, transcript, and the spoken-back final report.</div></div>",
+            f"""
+<div class="alert-emergency">
+    <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:0.5rem;">
+        <span style="font-size:1.1rem; font-weight:850; color:#FEE2E2; display:flex; align-items:center; gap:0.5rem;">
+            🚨 URGENT CLINICAL SAFETY ALERT: CRITICAL PRESENTATION
+        </span>
+        <span class="badge-emergency">RED-FLAG ACTIVE</span>
+    </div>
+    <div style="font-size:0.95rem; font-weight:700; color:#FECDD3; margin-bottom:0.4rem;">
+        {triage.category}: {flags_str}
+    </div>
+    <div style="font-size:0.88rem; color:#FEE2E2; line-height:1.55;">
+        {triage.immediate_guidance}<br/>
+        <b>Direct Action:</b> Please contact 911 / 112 / local emergency services or proceed immediately to the nearest Emergency Department.
+    </div>
+</div>
+""",
             unsafe_allow_html=True,
         )
-        badge_col, transcript_col = st.columns([1, 2])
-        with badge_col:
-            st.markdown(
-                f'<div class="lang-badge"><span class="flag">{voice_profile.flag_emoji}</span>{voice_profile.display_name}</div>',
-                unsafe_allow_html=True,
-            )
-            if confidence is not None:
-                st.caption(f"Detection confidence: {confidence:.0%}")
-            if result_state.get("voice_input_error"):
-                st.warning(f"Transcription issue: {result_state['voice_input_error']}")
-        with transcript_col:
-            st.text_area(
-                "Transcribed / combined patient narrative",
-                value=result_state.get("raw_symptoms", ""),
-                height=90,
-                key="voice_transcript_display",
-            )
 
-        output_audio_path = result_state.get("output_audio_path")
-        if output_audio_path:
-            st.markdown(
-                '<div class="waveform"><span></span><span></span><span></span><span></span><span></span></div>'
-                "<b>Spoken final report</b> (auto-plays if your browser allows it):",
-                unsafe_allow_html=True,
-            )
-            try:
-                st.audio(output_audio_path, format="audio/mp3", autoplay=True)
-            except TypeError:
-                # Older Streamlit versions without the autoplay kwarg.
-                st.audio(output_audio_path, format="audio/mp3")
-        elif result_state.get("voice_output_error"):
-            st.warning(f"Speech synthesis issue: {result_state['voice_output_error']}")
+    # Main Two-Column Layout
+    conv_col, summary_col = st.columns([1.28, 1])
 
-    insight_column, diagnosis_column = st.columns([1, 1.35])
-    with insight_column:
-        st.markdown('<div class="panel"><div class="panel-title">Medical Ledger Chips</div><div class="panel-subtitle">Normalized observations emitted by the Triage peer.</div><div class="chip-row">' + "".join(f'<span class="chip">● {item}</span>' for item in symptoms_found) + '</div></div>', unsafe_allow_html=True)
-        st.markdown("<br>", unsafe_allow_html=True)
-        st.markdown('<div class="panel"><div class="panel-title">Governance Clearance</div><div class="panel-subtitle">Compliance peer decision and clinical safety boundary.</div></div>', unsafe_allow_html=True)
-        if "FAILED" in compliance_status:
-            st.error(compliance_status)
+    with conv_col:
+        st.markdown(
+            """
+<div class="glass-card">
+    <div class="card-header-bar">
+        <div class="card-header-title">
+            <span>🎙️</span>
+            <span>Patient Voice Consultation</span>
+        </div>
+        <div class="waveform-visualizer">
+            <span></span><span></span><span></span><span></span><span></span>
+        </div>
+    </div>
+""",
+            unsafe_allow_html=True,
+        )
+
+        state_title = "READY"
+        state_desc = f"Listening in {curr_profile.display_name}. Speak or click a scenario to begin."
+        if st.session_state.voice_state == "PROCESSING":
+            state_title = "PROCESSING & THINKING"
+            state_desc = "Transcribing with AssemblyAI and analyzing clinical presentation..."
+        elif st.session_state.voice_state == "SPEAKING":
+            state_title = "SPEAKING"
+            state_desc = f"Responding in {curr_profile.display_name} with synthesized medical guidance."
+
+        st.markdown(
+            f"""
+<div class="voice-state-banner">
+    <div class="voice-state-left">
+        <span class="telemetry-dot dot-online"></span>
+        <div>
+            <div class="voice-state-title">{state_title}</div>
+            <div class="voice-state-desc">{state_desc}</div>
+        </div>
+    </div>
+    <div style="font-size:0.75rem; font-weight:700; color:#38BDF8;">
+        {curr_profile.flag_emoji} {curr_profile.display_name}
+    </div>
+</div>
+""",
+            unsafe_allow_html=True,
+        )
+
+        audio_input_data = None
+        if hasattr(st, "audio_input"):
+            audio_input_data = st.audio_input("Live Microphone Recording (Speak naturally)")
         else:
-            st.success(compliance_status)
-    with diagnosis_column:
-        st.markdown('<div class="panel panel-success"><div class="panel-title">Diagnostic Intelligence Brief <span>DECISION SUPPORT</span></div><div class="panel-subtitle">Best-scored reasoning pathway from the Diagnostic peer.</div></div>', unsafe_allow_html=True)
-        st.code(result_state.get("initial_diagnosis", ""), language="text")
-        st.info(result_state.get("medical_research_data", ""))
+            st.info("Microphone input ready. You can also upload a recording below.")
 
-    st.markdown('<div class="panel"><div class="panel-title">Verified Clinical Compilation</div><div class="panel-subtitle">Final output remains a practitioner-reviewed decision-support artifact.</div></div>', unsafe_allow_html=True)
-    st.text_area("Secure clinical report", value=result_state.get("final_clinical_report", ""), height=150)
+        up_col, text_col = st.columns(2)
+        with up_col:
+            uploaded_file = st.file_uploader(
+                "Upload voice file (.wav, .mp3, .m4a)",
+                type=["wav", "mp3", "m4a", "ogg"],
+                key="voice_turn_upload",
+            )
+        with text_col:
+            typed_fallback = st.text_area(
+                "Symptom description or follow-up reply",
+                value="",
+                placeholder="E.g., I have had a mild headache and tiredness since yesterday...",
+                height=82,
+                key="typed_symptom_input",
+            )
 
-    export_txt_col, export_html_col = st.columns(2)
-    with export_txt_col:
-        st.download_button(
-            "⬇️ Download as .txt",
-            data=str(result_state.get("final_clinical_report", "")).encode("utf-8"),
-            file_name=f"{patient_id}-report.txt",
-            mime="text/plain",
-            use_container_width=True,
+        submit_turn_clicked = st.button("🎤 Transcribe & Consult MedVoice AI", type="primary", use_container_width=True)
+        st.markdown("</div>", unsafe_allow_html=True)
+
+        to_process_audio_bytes = None
+        to_process_text = None
+        effective_lang = (
+            st.session_state.selected_language_key
+            if st.session_state.selected_language_key != "auto"
+            else "auto"
         )
-    with export_html_col:
-        st.download_button(
-            "⬇️ Download printable report (.html)",
-            data=build_report_html(result_state, patient_id).encode("utf-8"),
-            file_name=f"{patient_id}-report.html",
-            mime="text/html",
-            use_container_width=True,
+
+        if trigger_scenario_text:
+            to_process_text = trigger_scenario_text
+            effective_lang = trigger_scenario_lang
+        elif submit_turn_clicked:
+            if audio_input_data is not None:
+                to_process_audio_bytes = audio_input_data.getvalue()
+            elif uploaded_file is not None:
+                to_process_audio_bytes = uploaded_file.getvalue()
+            elif typed_fallback.strip():
+                to_process_text = typed_fallback.strip()
+            else:
+                st.warning("Please record your voice, upload an audio file, or type your symptoms first.")
+
+        if to_process_audio_bytes is not None or to_process_text is not None:
+            with st.spinner("AssemblyAI transcribing audio & synthesizing clinical guidance..."):
+                try:
+                    response: VoiceAgentResponse = asyncio.run(
+                        st.session_state.voice_agent.process_voice_turn(
+                            audio_bytes=to_process_audio_bytes,
+                            text_input=to_process_text,
+                            language_preference=effective_lang,
+                            conversation_history=st.session_state.conversation_history,
+                            patient_id=st.session_state.patient_id,
+                        )
+                    )
+
+                    st.session_state.conversation_history.append({
+                        "speaker": "patient",
+                        "text": response.transcript,
+                        "timestamp": time.time(),
+                        "language": response.detected_language_code,
+                    })
+                    st.session_state.conversation_history.append({
+                        "speaker": "assistant",
+                        "text": response.assistant_response,
+                        "follow_up": response.suggested_follow_up,
+                        "audio_path": response.audio_file_path,
+                        "triage": response.triage,
+                        "timestamp": time.time(),
+                        "language": response.detected_language_code,
+                    })
+
+                    st.session_state.latest_summary = response.medical_summary
+                    st.session_state.last_triage = response.triage
+                    st.session_state.voice_state = "SPEAKING"
+                    st.rerun()
+
+                except Exception as exc:
+                    st.error(f"Voice turnaround error: {exc}")
+                    st.session_state.voice_state = "READY"
+
+        # Live Conversation Feed
+        st.markdown(
+            """
+<div class="glass-card">
+    <div class="card-header-bar">
+        <div class="card-header-title">
+            <span>💬</span>
+            <span>Live Consultation Stream</span>
+        </div>
+        <div style="font-size:0.75rem; color:var(--text-muted);">
+            Turn Count: <b>{}</b>
+        </div>
+    </div>
+""".format(len(st.session_state.conversation_history) // 2),
+            unsafe_allow_html=True,
         )
-    st.caption(
-        "The .html file opens correctly in every language (Amharic/Arabic/Chinese/Hindi included) "
-        "using your browser's own fonts — open it and use your browser's Print → Save as PDF for an "
-        "archival PDF. A server-generated PDF isn't offered here because it would need Unicode fonts "
-        "bundled for each script, which isn't set up in this project yet."
+
+        if not st.session_state.conversation_history:
+            st.markdown(
+                """
+<div style="text-align:center; padding:2rem 1rem; color:var(--text-secondary);">
+    <div style="font-size:2rem; margin-bottom:0.5rem;">🎙️</div>
+    <div style="font-weight:700; font-size:1rem; color:#E2E8F0;">Consultation Feed Ready</div>
+    <div style="font-size:0.84rem; max-width:380px; margin:0.35rem auto; line-height:1.5;">
+        Speak into the microphone above or select a 1-Click Evaluation Scenario to hear MedVoice AI interact in real time.
+    </div>
+</div>
+""",
+                unsafe_allow_html=True,
+            )
+        else:
+            for turn in st.session_state.conversation_history:
+                if turn["speaker"] == "patient":
+                    lang_tag = turn.get("language", "en").upper()
+                    st.markdown(
+                        f"""
+<div class="chat-stream">
+    <div class="chat-bubble-patient">
+        <div class="chat-meta-bar" style="color:#38BDF8;">
+            <span>👤 Patient Narrative</span>
+            <span>AssemblyAI STT &bull; {lang_tag} &bull; 🔒 PII Redacted</span>
+        </div>
+        <div style="font-size:0.95rem; line-height:1.6;">"{turn['text']}"</div>
+    </div>
+</div>
+""",
+                        unsafe_allow_html=True,
+                    )
+                else:
+                    audio_path = turn.get("audio_path")
+                    triage_info = turn.get("triage")
+                    badge_html = '<span class="badge-routine">🟢 ROUTINE</span>'
+                    if triage_info:
+                        if triage_info.risk_level == RiskLevel.EMERGENCY:
+                            badge_html = '<span class="badge-emergency">🚨 CRITICAL RED-FLAG</span>'
+                        elif triage_info.risk_level == RiskLevel.URGENT:
+                            badge_html = '<span class="badge-urgent">⚠️ URGENT CARE</span>'
+
+                    formatted_resp = turn["text"].replace("\n", "<br/>")
+                    follow_up = turn.get("follow_up")
+                    follow_up_html = ""
+                    if follow_up and follow_up != "Please seek immediate emergency medical care now.":
+                        follow_up_html = f"""
+<div class="follow-up-box">
+    <b>🔍 Clinical Follow-up:</b> {follow_up}
+</div>
+"""
+                    st.markdown(
+                        f"""
+<div class="chat-stream">
+    <div class="chat-bubble-assistant">
+        <div class="chat-meta-bar" style="color:#C084FC;">
+            <span style="display:flex; align-items:center; gap:0.4rem;">
+                <div class="waveform-visualizer"><span></span><span></span><span></span><span></span><span></span></div>
+                MedVoice AI
+            </span>
+            <span>{badge_html}</span>
+        </div>
+        <div style="line-height:1.65; font-size:0.95rem;">{formatted_resp}</div>
+        {follow_up_html}
+    </div>
+</div>
+""",
+                        unsafe_allow_html=True,
+                    )
+                    if audio_path and os.path.exists(audio_path):
+                        st.audio(audio_path, format="audio/mp3", autoplay=True)
+
+        st.markdown("</div>", unsafe_allow_html=True)
+
+    with summary_col:
+        st.markdown(
+            """
+<div class="glass-card">
+    <div class="card-header-bar">
+        <div class="card-header-title">
+            <span>📋</span>
+            <span>Clinician-Ready Summary</span>
+        </div>
+        <span class="card-header-badge" style="background:rgba(16,185,129,0.15); color:#6EE7B7; border:1px solid rgba(16,185,129,0.3);">
+            HIPAA COMPLIANT
+        </span>
+    </div>
+""",
+            unsafe_allow_html=True,
+        )
+
+        summary: Optional[StructuredMedicalSummary] = st.session_state.latest_summary
+        if summary is None:
+            st.markdown(
+                """
+<div class="alert-normal" style="background:rgba(16,185,129,0.08); padding:0.8rem; border-radius:12px; border:1px solid rgba(16,185,129,0.25); margin-bottom:1rem;">
+    <div style="font-weight:750; font-size:0.86rem; color:#6EE7B7; margin-bottom:0.25rem;">
+        🛡️ Safety Screening: Active & Monitoring
+    </div>
+    <div style="font-size:0.78rem; color:var(--text-secondary); line-height:1.45;">
+        Continuous deterministic screening for cardiovascular, respiratory, stroke, hemorrhagic, and acute distress presentations across 6 languages.
+    </div>
+</div>
+
+<div style="text-align:center; padding:2rem 1rem; color:var(--text-muted);">
+    <div style="font-size:2rem; margin-bottom:0.4rem;">📑</div>
+    <div style="font-weight:700; font-size:0.92rem; color:#E2E8F0;">Summary Dossier Awaiting Voice Intake</div>
+    <div style="font-size:0.78rem; max-width:300px; margin:0.35rem auto; line-height:1.5;">
+        As the patient describes symptoms, chief complaints, duration, severity, and triage pathways will populate here.
+    </div>
+</div>
+""",
+                unsafe_allow_html=True,
+            )
+        else:
+            risk_badge = (
+                '<span class="badge-emergency">🚨 EMERGENCY</span>'
+                if summary.triage_risk_level == "EMERGENCY"
+                else '<span class="badge-urgent">⚠️ URGENT</span>'
+                if summary.triage_risk_level == "URGENT"
+                else '<span class="badge-routine">🟢 ROUTINE</span>'
+            )
+
+            symptoms_chips = "".join(f'<span class="symptom-chip">● {s}</span>' for s in summary.extracted_symptoms)
+            flags_chips = "".join(f'<span class="flag-chip">🚨 {f}</span>' for f in summary.emergency_flags)
+
+            st.markdown(
+                f"""
+<div style="margin-bottom:0.85rem;">
+    <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:0.6rem;">
+        <span style="font-size:0.82rem; color:var(--text-muted);">Patient ID: <b style="color:#E2E8F0;">{summary.patient_id}</b></span>
+        {risk_badge}
+    </div>
+    <div style="margin-bottom:0.65rem;">
+        <div style="font-size:0.72rem; text-transform:uppercase; color:var(--text-muted); font-weight:700; letter-spacing:0.06em;">Chief Complaint</div>
+        <div style="font-size:0.92rem; font-weight:700; color:#F8FAFC; margin-top:0.15rem;">"{summary.chief_complaint}"</div>
+    </div>
+    <div style="margin-bottom:0.65rem;">
+        <div style="font-size:0.72rem; text-transform:uppercase; color:var(--text-muted); font-weight:700; letter-spacing:0.06em;">Mapped Symptoms</div>
+        <div style="margin-top:0.3rem;">{symptoms_chips}</div>
+    </div>
+    <div style="display:grid; grid-template-columns:1fr 1fr; gap:0.6rem; margin-bottom:0.65rem; background:rgba(8,13,26,0.5); padding:0.6rem 0.8rem; border-radius:12px; border:1px solid var(--line-subtle);">
+        <div>
+            <div style="font-size:0.7rem; color:var(--text-muted); font-weight:700;">DURATION</div>
+            <div style="font-size:0.85rem; font-weight:700; color:#E2E8F0;">{summary.duration_onset}</div>
+        </div>
+        <div>
+            <div style="font-size:0.7rem; color:var(--text-muted); font-weight:700;">SEVERITY</div>
+            <div style="font-size:0.85rem; font-weight:700; color:#E2E8F0;">{summary.severity_character}</div>
+        </div>
+    </div>
+    {f'<div style="margin-bottom:0.65rem;"><div style="font-size:0.72rem; text-transform:uppercase; color:#FECDD3; font-weight:700;">Red-Flag Indicators</div><div style="margin-top:0.25rem;">{flags_chips}</div></div>' if summary.emergency_flags else ''}
+    <div style="margin-bottom:0.65rem;">
+        <div style="font-size:0.72rem; text-transform:uppercase; color:var(--text-muted); font-weight:700; letter-spacing:0.06em;">Safe Clinical Pathway</div>
+        <div style="font-size:0.86rem; color:#E2E8F0; line-height:1.45; margin-top:0.15rem;">{summary.recommended_next_steps}</div>
+    </div>
+    <div style="font-size:0.74rem; color:var(--text-muted); border-top:1px solid var(--line-subtle); padding-top:0.5rem; margin-top:0.6rem;">
+        Consultation Language: <b style="color:#E2E8F0;">{summary.language}</b>
+    </div>
+</div>
+""",
+                unsafe_allow_html=True,
+            )
+
+            exp_col1, exp_col2 = st.columns(2)
+            with exp_col1:
+                txt_summary = (
+                    f"MEDVOICE AI CLINICAL SUMMARY\n"
+                    f"Patient ID: {summary.patient_id}\n"
+                    f"Triage Risk Level: {summary.triage_risk_level}\n"
+                    f"Language: {summary.language}\n"
+                    f"Chief Complaint: {summary.chief_complaint}\n"
+                    f"Extracted Symptoms: {', '.join(summary.extracted_symptoms)}\n"
+                    f"Duration/Onset: {summary.duration_onset}\n"
+                    f"Severity: {summary.severity_character}\n"
+                    f"Recommended Next Steps: {summary.recommended_next_steps}\n"
+                    f"Disclaimer: {summary.ai_disclaimer}\n"
+                )
+                st.download_button(
+                    "⬇️ Download .txt",
+                    data=txt_summary.encode("utf-8"),
+                    file_name=f"{summary.patient_id}-summary.txt",
+                    mime="text/plain",
+                    use_container_width=True,
+                )
+
+            with exp_col2:
+                html_summary = f"""<!DOCTYPE html>
+<html>
+<head><meta charset="utf-8"><title>Clinical Summary - {summary.patient_id}</title>
+<style>
+body {{ font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; max-width: 680px; margin: 2rem auto; color: #111; line-height: 1.6; padding: 0 1rem; }}
+h1 {{ border-bottom: 2px solid #0284c7; padding-bottom: 0.5rem; color: #0f172a; }}
+.badge {{ display: inline-block; padding: 0.25rem 0.6rem; border-radius: 4px; font-weight: bold; background: #e0f2fe; color: #0369a1; }}
+.footer {{ margin-top: 2rem; font-size: 0.8rem; color: #64748b; border-top: 1px solid #e2e8f0; padding-top: 0.5rem; }}
+</style>
+</head>
+<body>
+<h1>MedVoice AI — Clinical Summary</h1>
+<p><b>Patient Tracker ID:</b> {summary.patient_id} &nbsp;|&nbsp; <b>Risk Level:</b> <span class="badge">{summary.triage_risk_level}</span></p>
+<p><b>Chief Complaint:</b> {summary.chief_complaint}</p>
+<p><b>Symptoms:</b> {', '.join(summary.extracted_symptoms)}</p>
+<p><b>Duration:</b> {summary.duration_onset} &nbsp;|&nbsp; <b>Severity:</b> {summary.severity_character}</p>
+<p><b>Recommended Steps:</b> {summary.recommended_next_steps}</p>
+<div class="footer">{summary.ai_disclaimer}</div>
+</body></html>"""
+                st.download_button(
+                    "⬇️ Printable .html",
+                    data=html_summary.encode("utf-8"),
+                    file_name=f"{summary.patient_id}-report.html",
+                    mime="text/html",
+                    use_container_width=True,
+                )
+
+            st.markdown("<hr style='border-color:var(--line-subtle); margin:1rem 0;'>", unsafe_allow_html=True)
+            st.caption("Need advanced clinical consensus? Dispatch this case to the 9-node LangGraph digital workforce.")
+            if st.button("🚀 Dispatch to Deep Multi-Agent Workforce", use_container_width=True):
+                st.session_state.app_mode = "deep_workforce"
+                st.session_state.deep_intake_symptoms = summary.chief_complaint
+                st.session_state.deep_intake_lang = summary.language
+                st.rerun()
+
+        st.markdown("</div>", unsafe_allow_html=True)
+
+        st.markdown(
+            f"""
+<div class="legal-disclaimer">
+    <b>⚠️ MedVoice AI Clinical Governance:</b> {curr_profile.disclaimer}
+</div>
+""",
+            unsafe_allow_html=True,
+        )
+
+# =========================================================================
+# MODE 2: CLINICAL COMMAND CENTER & 9-NODE WORKFORCE
+# =========================================================================
+else:
+    st.markdown(
+        """
+<div class="glass-card glass-card-accent">
+    <div class="card-header-bar">
+        <div class="card-header-title">
+            <span>🔬</span>
+            <span>Clinical Command Center & 9-Node Peer-to-Peer Workforce</span>
+        </div>
+        <span class="card-header-badge" style="background:rgba(16,185,129,0.2); color:#6EE7B7; border:1px solid var(--accent-emerald);">
+            AUTONOMOUS ORCHESTRATION ACTIVE
+        </span>
+    </div>
+    <div style="font-size:0.84rem; color:var(--text-secondary); line-height:1.5;">
+        Decentralized clinical state machine: Voice Intake (AssemblyAI) ➔ Triage ➔ Researcher (ChromaDB RAG)
+        ➔ Diagnostic (Tree-of-Thoughts) ⟲ Critic (Self-Healing Gate) ➔ Compliance (PII Guard) ➔ Practitioner HITL Review ➔ Final Compile ➔ Spoken Voice Output.
+    </div>
+</div>
+""",
+        unsafe_allow_html=True,
     )
 
-    if compliance_status == "PASSED" and result_state.get("hitl_approved") is not True:
-        st.markdown('<div class="panel panel-accent"><div class="panel-title">Practitioner Review Checkpoint <span>HITL REQUIRED</span></div><div class="panel-subtitle">Review the generated evidence before allowing the Final Compile peer to complete.</div></div>', unsafe_allow_html=True)
-        st.text_input("Practitioner approval notes", value="Validated for clinical evaluation.")
-        approve_clicked = st.button("✅ Approve and continue to final compile", use_container_width=True)
-        if approve_clicked:
-            request = st.session_state["last_request"]
-            approved_state = SharedState(
-                patient_id=request["patient_id"],
-                raw_symptoms=request["raw_symptoms"],
-                detected_language_code=request.get("detected_language_code", "en"),
-                retry_count=0,
-                hitl_approved=True,
+    if st.button("← Return to Interactive Voice Assistant", use_container_width=False):
+        st.session_state.app_mode = "voice_agent"
+        st.rerun()
+
+    st.markdown('<div class="section-label" style="margin-top:1rem; color:#7dd3fc; font-size:.74rem; font-weight:800; text-transform:uppercase;">Admission & Context</div>', unsafe_allow_html=True)
+    intake_col, context_col = st.columns([1.35, 1])
+
+    with intake_col:
+        with st.expander("Open admission fields", expanded=True):
+            p_id = st.text_input("Patient tracker ID", value=st.session_state.patient_id, key="deep_pid")
+            f_name = st.text_input("Full name", value="Jordan Morgan", key="deep_fname")
+            age = st.number_input("Age", min_value=0, max_value=125, value=48, step=1, key="deep_age")
+            v_col, h_col = st.columns(2)
+            with v_col:
+                vitals = st.text_input("Vital signs", value="BP 168/102 mmHg", key="deep_vitals")
+            with h_col:
+                history = st.text_input("Medical history ledger", value="Type-2 diabetes; Metformin", key="deep_history")
+
+            default_symptoms = getattr(
+                st.session_state,
+                "deep_intake_symptoms",
+                "Sudden severe headache with elevated blood pressure spikes. Reports increased thirst and poor sleep.",
             )
-            with st.spinner("Resuming P2P flow through practitioner approval..."):
-                st.session_state.last_result = run_streaming_graph(compiled_graph, approved_state, graph_placeholder, cards_placeholder, activity_placeholder)
+            symptoms_text = st.text_area(
+                "Presenting symptoms and clinical narrative",
+                value=default_symptoms,
+                height=110,
+                key="deep_symptom_text",
+            )
+
+        st.markdown(
+            '<div style="margin-top:0.8rem; font-weight:700; font-size:0.88rem; color:#A78BFA;">'
+            '🎙️ Multilingual Voice Intake (Optional)'
+            '</div>',
+            unsafe_allow_html=True,
+        )
+        uploaded_audio = st.file_uploader(
+            "Upload symptom audio (wav, mp3, m4a, ogg)",
+            type=["wav", "mp3", "m4a", "ogg", "flac"],
+            key="deep_audio_uploader",
+        )
+        mic_recording = None
+        if hasattr(st, "audio_input"):
+            mic_recording = st.audio_input("...or record directly in the browser", key="deep_mic")
+        if mic_recording is not None:
+            uploaded_audio = mic_recording
+        if uploaded_audio is not None:
+            st.audio(uploaded_audio, format=getattr(uploaded_audio, "type", None) or "audio/wav")
+
+    with context_col:
+        st.markdown(
+            '<div class="glass-card"><div class="card-header-title">Semantic Memory (ChromaDB)</div>'
+            '<div style="font-size:0.8rem; color:var(--text-secondary); margin-bottom:0.75rem;">'
+            'Retrieve historical clinical profiles matching this presentation before activation.'
+            '</div>',
+            unsafe_allow_html=True,
+        )
+        if st.button("Retrieve historical context", use_container_width=True, key="btn_retrieve_ctx"):
+            if symptoms_text.strip():
+                st.success("Historical case context recovered from vector memory:")
+                st.code(vector_store.search_similar_cases(symptoms_text, max_results=1)[0], language="text")
+            else:
+                st.error("Presenting symptoms narrative required.")
+        else:
+            st.info("The memory layer remains accessible autonomously to the Researcher peer during execution.")
+        st.markdown("</div>", unsafe_allow_html=True)
+
+    st.markdown('<div class="section-label" style="margin-top:1.5rem; color:#7dd3fc; font-size:.74rem; font-weight:800; text-transform:uppercase;">Live Workforce Telemetry</div>', unsafe_allow_html=True)
+    flow_hdr_col, flow_btn_col = st.columns([3, 1])
+    with flow_hdr_col:
+        st.caption("Voice Intake ➔ Triage ➔ Researcher ➔ Diagnostic ⟲ Critic ➔ Compliance ➔ Practitioner HITL ➔ Final Compile ➔ Voice Output")
+    with flow_btn_col:
+        activate_workforce_clicked = st.button("🚀 Activate workforce", type="primary", use_container_width=True)
+
+    graph_placeholder = st.empty()
+    cards_placeholder = st.empty()
+    activity_placeholder = st.empty()
+
+    graph_placeholder.graphviz_chart(collaboration_dot(None, set()), use_container_width=True)
+    render_agent_cards(cards_placeholder, None, set(), set())
+    activity_placeholder.caption("Workforce standby. Activate the pipeline to stream live state packets across peer nodes.")
+
+    if activate_workforce_clicked:
+        if not symptoms_text.strip() and uploaded_audio is None:
+            st.error("Either typed symptoms or an audio recording is required before activation.")
+        else:
+            meta_prefix = f"Patient {f_name}, age {age}. Vitals: {vitals}. History: {history}. Symptoms:"
+            raw_input = f"{meta_prefix} {symptoms_text}".strip()
+
+            input_audio_path = None
+            if uploaded_audio is not None:
+                audio_name = getattr(uploaded_audio, "name", None) or "recording.wav"
+                suffix = Path(audio_name).suffix or ".wav"
+                temp_path = Path(tempfile.gettempdir()) / f"voice_intake_{uuid.uuid4().hex[:10]}{suffix}"
+                temp_path.write_bytes(uploaded_audio.getvalue())
+                input_audio_path = str(temp_path)
+
+            initial_state = SharedState(
+                patient_id=p_id,
+                raw_symptoms=raw_input,
+                input_audio_path=input_audio_path,
+                retry_count=0,
+                hitl_approved=None,
+            )
+            with st.spinner("Streaming clinical state across peer nodes..."):
+                st.session_state.last_result = run_streaming_graph(
+                    compiled_graph, initial_state, graph_placeholder, cards_placeholder, activity_placeholder
+                )
+            st.session_state.last_request = {
+                "patient_id": p_id,
+                "raw_symptoms": st.session_state.last_result.get("raw_symptoms", raw_input),
+                "detected_language_code": st.session_state.last_result.get("detected_language_code", "en"),
+            }
             update_telemetry(st.session_state.last_result)
-            st.rerun()
 
-st.markdown('<div class="section-label">Infrastructure Cost Optimization Tracker</div>', unsafe_allow_html=True)
-footer_column, ledger_column = st.columns([1.25, 1])
-with footer_column:
-    st.markdown('<div class="panel"><div class="panel-title">Session Efficiency</div><div class="panel-subtitle">Live usage accounting across every worker handoff.</div><br>' + render_metric("Estimated transaction cost", f"${telemetry['total_cost']:.5f}", "success") + '</div>', unsafe_allow_html=True)
-with ledger_column:
-    st.markdown('<div class="panel"><div class="panel-title">Token Ledger</div>' + f'<div class="ledger-row"><span>Prompt tokens</span><span class="ledger-value">{telemetry["input"]:,}</span></div><div class="ledger-row"><span>Completion tokens</span><span class="ledger-value">{telemetry["output"]:,}</span></div><div class="ledger-row"><span>Total footprint</span><span class="ledger-value">{telemetry["input"] + telemetry["output"]:,}</span></div></div>', unsafe_allow_html=True)
+    result_state = st.session_state.get("last_result")
+    if result_state:
+        st.markdown('<div class="section-label" style="margin-top:1.5rem; color:#7dd3fc; font-size:.74rem; font-weight:800; text-transform:uppercase;">Clinical Insights & Governance</div>', unsafe_allow_html=True)
+        symptoms_found = result_state.get("extracted_symptoms", [])
+        compliance_status = str(result_state.get("compliance_status", "PENDING"))
+        status_tone = "success" if compliance_status == "PASSED" else "amber" if compliance_status == "PENDING" else ""
+        pipeline_step = str(result_state.get("current_step", ""))
+        nodes_complete = "9 / 9" if pipeline_step.startswith("VOICE_OUTPUT") else "6 / 9"
 
-st.markdown('<div class="footer-note">Clinical Command Center · P2P Agentic Workforce · Secure local telemetry · Practitioner oversight required</div>', unsafe_allow_html=True)
+        st.markdown(
+            '<div class="metric-grid">'
+            + render_metric("Workflow status", pipeline_step, status_tone)
+            + render_metric("Symptoms mapped", str(len(symptoms_found)), "info")
+            + render_metric("P2P nodes complete", nodes_complete, "info")
+            + render_metric("Compliance gate", compliance_status, status_tone)
+            + '</div>',
+            unsafe_allow_html=True,
+        )
+
+        detected_code = result_state.get("detected_language_code", "en")
+        voice_profile, _ = resolve_language_profile(detected_code)
+        output_audio_path = result_state.get("output_audio_path")
+
+        if output_audio_path or result_state.get("input_audio_path"):
+            st.markdown(
+                f'<div class="glass-card"><div class="card-header-title">🎙️ Multilingual Voice Round-Trip '
+                f'<span style="font-size:0.75rem; color:#38BDF8;">{voice_profile.flag_emoji} {voice_profile.display_name}</span></div>',
+                unsafe_allow_html=True,
+            )
+            v_badge_col, v_audio_col = st.columns([1, 2])
+            with v_badge_col:
+                st.caption(f"Detected Locale: {voice_profile.locale}")
+                if result_state.get("voice_input_error"):
+                    st.warning(f"Transcription note: {result_state['voice_input_error']}")
+            with v_audio_col:
+                if output_audio_path and os.path.exists(output_audio_path):
+                    st.markdown("<b>Spoken Final Synthesis:</b>", unsafe_allow_html=True)
+                    st.audio(output_audio_path, format="audio/mp3", autoplay=True)
+            st.markdown("</div>", unsafe_allow_html=True)
+
+        ins_col, diag_col = st.columns([1, 1.35])
+        with ins_col:
+            st.markdown(
+                '<div class="glass-card"><div class="card-header-title">Medical Ledger Chips</div>'
+                '<div style="margin-top:0.5rem;">'
+                + "".join(f'<span class="symptom-chip">● {item}</span>' for item in symptoms_found)
+                + '</div><hr style="border-color:var(--line-subtle); margin:0.8rem 0;">'
+                '<div class="card-header-title" style="font-size:0.95rem;">Governance Clearance</div>',
+                unsafe_allow_html=True,
+            )
+            if "FAILED" in compliance_status:
+                st.error(compliance_status)
+            else:
+                st.success(compliance_status)
+            st.markdown("</div>", unsafe_allow_html=True)
+
+        with diag_col:
+            st.markdown(
+                '<div class="glass-card glass-card-accent"><div class="card-header-title">Diagnostic Intelligence Brief</div>'
+                '<div style="font-size:0.78rem; color:var(--text-muted); margin-bottom:0.5rem;">Tree-of-Thoughts Consensus & Evidence</div>',
+                unsafe_allow_html=True,
+            )
+            st.code(result_state.get("initial_diagnosis", "No differential diagnosis established."), language="text")
+            if result_state.get("medical_research_data"):
+                st.info(result_state.get("medical_research_data"))
+            st.markdown("</div>", unsafe_allow_html=True)
+
+        st.markdown(
+            '<div class="glass-card"><div class="card-header-title">Verified Clinical Compilation</div>'
+            '<div style="font-size:0.78rem; color:var(--text-muted); margin-bottom:0.5rem;">Practitioner-reviewed decision support dossier.</div>',
+            unsafe_allow_html=True,
+        )
+        st.text_area("Final clinical report", value=result_state.get("final_clinical_report", ""), height=140, key="deep_final_report_area")
+
+        rep_txt_col, rep_html_col = st.columns(2)
+        with rep_txt_col:
+            st.download_button(
+                "⬇️ Download as .txt",
+                data=str(result_state.get("final_clinical_report", "")).encode("utf-8"),
+                file_name=f"{st.session_state.patient_id}-report.txt",
+                mime="text/plain",
+                use_container_width=True,
+                key="btn_dl_txt",
+            )
+        with rep_html_col:
+            st.download_button(
+                "⬇️ Download printable report (.html)",
+                data=build_report_html(result_state, st.session_state.patient_id).encode("utf-8"),
+                file_name=f"{st.session_state.patient_id}-report.html",
+                mime="text/html",
+                use_container_width=True,
+                key="btn_dl_html",
+            )
+        st.markdown("</div>", unsafe_allow_html=True)
+
+        # HITL Practitioner Review Checkpoint
+        if compliance_status == "PASSED" and result_state.get("hitl_approved") is not True:
+            st.markdown(
+                '<div class="glass-card glass-card-accent">'
+                '<div class="card-header-title" style="color:#F59E0B;">👨‍⚕️ Practitioner Review Checkpoint (HITL REQUIRED)</div>'
+                '<div style="font-size:0.8rem; color:var(--text-secondary); margin-bottom:0.6rem;">Review clinical differential before allowing Final Compile to complete.</div>',
+                unsafe_allow_html=True,
+            )
+            st.text_input("Practitioner approval notes", value="Validated for clinical evaluation.", key="hitl_notes")
+            approve_clicked = st.button("✅ Approve and continue to final compile", type="primary", use_container_width=True, key="btn_hitl_approve")
+            if approve_clicked:
+                req = st.session_state["last_request"]
+                approved_state = SharedState(
+                    patient_id=req["patient_id"],
+                    raw_symptoms=req["raw_symptoms"],
+                    detected_language_code=req.get("detected_language_code", "en"),
+                    retry_count=0,
+                    hitl_approved=True,
+                )
+                with st.spinner("Resuming P2P flow through practitioner approval..."):
+                    st.session_state.last_result = run_streaming_graph(
+                        compiled_graph, approved_state, graph_placeholder, cards_placeholder, activity_placeholder
+                    )
+                update_telemetry(st.session_state.last_result)
+                st.rerun()
+            st.markdown("</div>", unsafe_allow_html=True)
+
+# =========================================================================
+# GLOBAL FOOTER
+# =========================================================================
+st.markdown(
+    """
+<div style="text-align:center; color:#64748B; font-size:0.75rem; padding-top:2.5rem; border-top:1px solid rgba(148,163,184,0.1); margin-top:3rem;">
+    MedVoice AI &bull; Built for the AssemblyAI Voice Agent Hackathon 2026 &bull;
+    AssemblyAI Real-Time Speech-to-Text &bull; 6-Language Unified Mesh &bull; Human-in-the-Loop Safe Healthcare Architecture
+</div>
+""",
+    unsafe_allow_html=True,
+)

@@ -24,6 +24,7 @@ _CREDIT_CARD_RE = re.compile(r"\b(?:\d[ -]?){13,19}\b")
 # than under-redacting a real identifier.
 _LONG_ID_RE = re.compile(r"\b\d{6,}\b")
 _PHONE_RE = re.compile(r"\b(?:\+?\d{1,3}[\s.-]?)?\(?\d{2,4}\)?[\s.-]?\d{3,4}[\s.-]?\d{3,4}\b")
+_NAME_INTRO_RE = re.compile(r"(?<=\bmy name is\s)([A-Z][a-z]+(?:\s+[A-Z][a-z]+)?)\b", re.IGNORECASE)
 _LEGAL_RISK_RE = re.compile(
     r"\b(sue|suing|sued|lawsuit|lawyer|attorney|litigation|malpractice)\b",
     re.IGNORECASE,
@@ -37,6 +38,7 @@ _REDACTION_PATTERNS = (
     (_CREDIT_CARD_RE, "[REDACTED_CARD]"),
     (_LONG_ID_RE, "[REDACTED_ID]"),
     (_PHONE_RE, "[REDACTED_PHONE]"),
+    (_NAME_INTRO_RE, "[REDACTED_NAME]"),
 )
 
 
