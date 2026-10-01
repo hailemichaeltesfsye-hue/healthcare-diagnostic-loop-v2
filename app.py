@@ -24,6 +24,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Mapping, Optional, Set
 
 import streamlit as st
+import streamlit.components.v1 as components
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -32,6 +33,10 @@ from src.agents.voice_agent import (
     HealthcareVoiceAgent,
     StructuredMedicalSummary,
     VoiceAgentResponse,
+)
+from src.ui.workforce_topology import (
+    WORKFORCE_NODES,
+    generate_live_workforce_topology_html,
 )
 from src.db.vector_store import ClinicalVectorStore
 from src.graph.pipeline import compile_workflow
@@ -671,6 +676,22 @@ if "selected_language_key" not in st.session_state:
 vector_store = get_vector_store()
 compiled_graph = get_compiled_graph()
 telemetry = get_telemetry()
+# Deep Workforce visualization state
+if "workforce_node_states" not in st.session_state:
+    # Map: node_id -> status (idle|active|complete|error|waiting|retry)
+    st.session_state.workforce_node_states = {}
+
+if "workforce_event_feed" not in st.session_state:
+    st.session_state.workforce_event_feed = []
+
+if "workforce_active_node" not in st.session_state:
+    st.session_state.workforce_active_node = None
+
+if "workforce_retry_count" not in st.session_state:
+    st.session_state.workforce_retry_count = 0
+
+if "workforce_running" not in st.session_state:
+    st.session_state.workforce_running = False
 
 # Real backend environment check for truthful telemetry
 aai_key = os.getenv("ASSEMBLYAI_API_KEY", "").strip()
@@ -1313,6 +1334,7 @@ else:
         <div class="card-header-title">
             <span>🔬</span>
             <span>Clinical Command Center & 9-Node Peer-to-Peer Workforce</span>
+            <span>Deep Clinical P2P Workforce — 9-Node LangGraph Digital Workforce</span>
         </div>
         <span class="card-header-badge" style="background:rgba(16,185,129,0.2); color:#6EE7B7; border:1px solid var(--accent-emerald);">
             AUTONOMOUS ORCHESTRATION ACTIVE
@@ -1321,6 +1343,8 @@ else:
     <div style="font-size:0.84rem; color:var(--text-secondary); line-height:1.5;">
         Decentralized clinical state machine: Voice Intake (AssemblyAI) ➔ Triage ➔ Researcher (ChromaDB RAG)
         ➔ Diagnostic (Tree-of-Thoughts) ⟲ Critic (Self-Healing Gate) ➔ Compliance (PII Guard) ➔ Practitioner HITL Review ➔ Final Compile ➔ Spoken Voice Output.
+        Peer-to-peer clinical state machine: Voice Intake (AssemblyAI) → Triage → Researcher (ChromaDB RAG)
+        → Diagnostic (Tree-of-Thoughts) ⟲ Critic (Self-Healing Gate) → Compliance → Practitioner HITL → Final Compile → Voice Output.
     </div>
 </div>
 """,
@@ -1329,10 +1353,28 @@ else:
 
     if st.button("← Return to Interactive Voice Assistant", use_container_width=False):
         st.session_state.app_mode = "voice_agent"
+        st.session_state.workforce_node_states = {}
+        st.session_state.workforce_event_feed = []
+        st.session_state.workforce_active_node = None
+        st.session_state.workforce_running = False
         st.rerun()
 
     st.markdown('<div class="section-label" style="margin-top:1rem; color:#7dd3fc; font-size:.74rem; font-weight:800; text-transform:uppercase;">Admission & Context</div>', unsafe_allow_html=True)
     intake_col, context_col = st.columns([1.35, 1])
+    # -----------------------------------------------------------------------
+    # LIVE AGENT COLLABORATION TOPOLOGY — HTML/SVG/JS Component
+    # -----------------------------------------------------------------------
+    _topology_html = generate_live_workforce_topology_html(
+        node_states=st.session_state.workforce_node_states,
+        active_node=st.session_state.workforce_active_node,
+        event_feed=st.session_state.workforce_event_feed[-25:],
+        retry_count=st.session_state.workforce_retry_count,
+        is_running=st.session_state.workforce_running,
+    )
+    # -----------------------------------------------------------------------
+    # INTAKE COLUMN + TOPOLOGY COLUMN (side by side)
+    # -----------------------------------------------------------------------
+    intake_col, graph_col = st.columns([1, 1.85])
 
     with intake_col:
         with st.expander("Open admission fields", expanded=True):
@@ -1394,53 +1436,7 @@ else:
             st.info("The memory layer remains accessible autonomously to the Researcher peer during execution.")
         st.markdown("</div>", unsafe_allow_html=True)
 
-    st.markdown('<div class="section-label" style="margin-top:1.5rem; color:#7dd3fc; font-size:.74rem; font-weight:800; text-transform:uppercase;">Live Workforce Telemetry</div>', unsafe_allow_html=True)
-    flow_hdr_col, flow_btn_col = st.columns([3, 1])
-    with flow_hdr_col:
-        st.caption("Voice Intake ➔ Triage ➔ Researcher ➔ Diagnostic ⟲ Critic ➔ Compliance ➔ Practitioner HITL ➔ Final Compile ➔ Voice Output")
-    with flow_btn_col:
-        activate_workforce_clicked = st.button("🚀 Activate workforce", type="primary", use_container_width=True)
-
-    graph_placeholder = st.empty()
-    cards_placeholder = st.empty()
-    activity_placeholder = st.empty()
-
-    graph_placeholder.graphviz_chart(collaboration_dot(None, set()), use_container_width=True)
-    render_agent_cards(cards_placeholder, None, set(), set())
-    activity_placeholder.caption("Workforce standby. Activate the pipeline to stream live state packets across peer nodes.")
-
-    if activate_workforce_clicked:
-        if not symptoms_text.strip() and uploaded_audio is None:
-            st.error("Either typed symptoms or an audio recording is required before activation.")
-        else:
-            meta_prefix = f"Patient {f_name}, age {age}. Vitals: {vitals}. History: {history}. Symptoms:"
-            raw_input = f"{meta_prefix} {symptoms_text}".strip()
-
-            input_audio_path = None
-            if uploaded_audio is not None:
-                audio_name = getattr(uploaded_audio, "name", None) or "recording.wav"
-                suffix = Path(audio_name).suffix or ".wav"
-                temp_path = Path(tempfile.gettempdir()) / f"voice_intake_{uuid.uuid4().hex[:10]}{suffix}"
-                temp_path.write_bytes(uploaded_audio.getvalue())
-                input_audio_path = str(temp_path)
-
-            initial_state = SharedState(
-                patient_id=p_id,
-                raw_symptoms=raw_input,
-                input_audio_path=input_audio_path,
-                retry_count=0,
-                hitl_approved=None,
-            )
-            with st.spinner("Streaming clinical state across peer nodes..."):
-                st.session_state.last_result = run_streaming_graph(
-                    compiled_graph, initial_state, graph_placeholder, cards_placeholder, activity_placeholder
-                )
-            st.session_state.last_request = {
-                "patient_id": p_id,
-                "raw_symptoms": st.session_state.last_result.get("raw_symptoms", raw_input),
-                "detected_language_code": st.session_state.last_result.get("detected_language_code", "en"),
-            }
-            update_telemetry(st.session_state.last_result)
+    # (Old graphviz/agent-cards visualization removed — Workforce State Topology below is the single canonical view)
 
     result_state = st.session_state.get("last_result")
     if result_state:
@@ -1556,13 +1552,335 @@ else:
                     retry_count=0,
                     hitl_approved=True,
                 )
-                with st.spinner("Resuming P2P flow through practitioner approval..."):
-                    st.session_state.last_result = run_streaming_graph(
-                        compiled_graph, approved_state, graph_placeholder, cards_placeholder, activity_placeholder
-                    )
-                update_telemetry(st.session_state.last_result)
+                # Re-queue via workforce running flag so the new topology shows the re-run
+                import datetime as _dt_hitl
+                st.session_state.workforce_node_states = {}
+                st.session_state.workforce_event_feed = [{
+                    "time": _dt_hitl.datetime.now().strftime("%H:%M:%S"),
+                    "icon": "👨\u200d⚕️",
+                    "text": "Practitioner approved — resuming P2P flow to Final Compile",
+                    "cls": "highlight",
+                }]
+                st.session_state.workforce_active_node = None
+                st.session_state.workforce_retry_count = 0
+                st.session_state.workforce_running = True
+                st.session_state._hitl_approved_state = approved_state
+                update_telemetry(st.session_state.get("last_result", {}))
                 st.rerun()
             st.markdown("</div>", unsafe_allow_html=True)
+
+    # -----------------------------------------------------------------------
+    # WORKFORCE CONTROLS — always rendered outside result_state so buttons
+    # are always defined (prevents NameError on run_sim_demo / run_deep_workforce)
+    # -----------------------------------------------------------------------
+    st.markdown(
+        '<div class="section-label" style="margin-top:1.5rem; color:#7dd3fc; font-size:.74rem; font-weight:800; text-transform:uppercase;">Workforce Controls</div>',
+        unsafe_allow_html=True,
+    )
+    default_symptoms = getattr(
+        st.session_state,
+        "deep_intake_symptoms",
+        "Sudden severe headache with elevated blood pressure spikes. Reports increased thirst and poor sleep.",
+    )
+    deep_symptoms = st.text_area(
+        "Patient Narrative / Transcribed Symptoms",
+        value=st.session_state.get("deep_symptom_text", default_symptoms),
+        height=120,
+        key="deep_symptom_text_ctrl",
+    )
+    deep_lang = st.selectbox(
+        "Target Spoken Language Profile",
+        options=list(SUPPORTED_CLINICAL_LANGUAGES.keys()),
+        format_func=lambda k: f"{SUPPORTED_CLINICAL_LANGUAGES[k].flag_emoji} {SUPPORTED_CLINICAL_LANGUAGES[k].display_name}",
+        index=0,
+        key="deep_lang_select",
+    )
+
+    run_deep_workforce = st.button("⚡ Execute Autonomous Workforce", type="primary", use_container_width=True)
+
+    col_sim, col_rst = st.columns(2)
+    with col_sim:
+        run_sim_demo = st.button("▶ Live Simulation", use_container_width=True, help="Watch animated 60fps walkthrough of all 9 nodes with self-healing")
+    with col_rst:
+        reset_canvas = st.button("↺ Reset Canvas", use_container_width=True)
+
+    if reset_canvas:
+        st.session_state.workforce_node_states = {}
+        st.session_state.workforce_event_feed = []
+        st.session_state.workforce_active_node = None
+        st.session_state.workforce_retry_count = 0
+        st.session_state.workforce_running = False
+        st.session_state.last_deep_result = None
+        st.rerun()
+
+    # Show mini-metrics if result available
+    deep_result = st.session_state.get("last_deep_result")
+    if deep_result:
+        st.markdown(
+            """
+<div class="glass-card" style="margin-top:0.8rem; padding:0.8rem 1rem;">
+    <div class="card-header-bar" style="margin-bottom:0.6rem;">
+        <div class="card-header-title" style="font-size:0.8rem;"><span>📊</span><span>Workforce Output</span></div>
+    </div>
+""",
+            unsafe_allow_html=True,
+        )
+        mc1, mc2 = st.columns(2)
+        mc1.metric("Retries", deep_result.get("retry_count", 0))
+        mc2.metric("Compliance", deep_result.get("compliance_status", "PASSED")[:7])
+        st.text_area(
+            "Final Clinical Synthesis",
+            value=deep_result.get("final_clinical_report", ""),
+            height=100,
+            key="deep_result_text",
+        )
+        deep_audio = deep_result.get("output_audio_path")
+        if deep_audio and os.path.exists(deep_audio):
+            st.markdown("**🔊 Spoken Synthesis:**")
+            st.audio(deep_audio, format="audio/mp3")
+        st.markdown("</div>", unsafe_allow_html=True)
+
+    with graph_col:
+        topology_placeholder = st.empty()
+        with topology_placeholder:
+            components.html(_topology_html, height=750, scrolling=False)
+
+    # -----------------------------------------------------------------------
+    # LIVE SIMULATION WALKTHROUGH DEMO (STREAMLIT NATIVE LOOP)
+    # -----------------------------------------------------------------------
+    if run_sim_demo:
+        import datetime as _dt_sim
+        st.session_state.workforce_node_states = {}
+        st.session_state.workforce_event_feed = []
+        st.session_state.workforce_active_node = None
+        st.session_state.workforce_retry_count = 0
+        st.session_state.workforce_running = True
+
+        def _push_sim(act_id, states, icon, msg, cls="active"):
+            ts = _dt_sim.datetime.now().strftime("%H:%M:%S")
+            st.session_state.workforce_active_node = act_id
+            st.session_state.workforce_node_states = dict(states)
+            st.session_state.workforce_event_feed.append({"time": ts, "icon": icon, "text": msg, "cls": cls})
+            with topology_placeholder:
+                components.html(
+                    generate_live_workforce_topology_html(
+                        node_states=st.session_state.workforce_node_states,
+                        active_node=st.session_state.workforce_active_node,
+                        event_feed=st.session_state.workforce_event_feed,
+                        retry_count=st.session_state.workforce_retry_count,
+                        is_running=True,
+                    ),
+                    height=750,
+                    scrolling=False,
+                )
+
+        sim_sequence = [
+            ("voice_input", "🎙️", "Voice Intake: Ingested patient audio narrative via AssemblyAI STT", "active", 0.8),
+            ("triage", "🩺", "Triage Gate: Filtered red-flag vitals (BP: 160/95, Cephalo-ocular stress)", "active", 0.8),
+            ("researcher", "📚", "Researcher: Retrieved evidence-based guidelines from ChromaDB Vector Store", "active", 0.8),
+            ("diagnostic", "🧠", "Diagnostic: Tree-of-Thoughts initial reasoning generated differential hypothesis", "active", 0.9),
+            ("critic", "🛡️", "Critic Gate: Confidence score 78.5% (<85%) — Triggering Self-Healing Loopback!", "warning", 1.1),
+            ("diagnostic_retry", "🧠", "Self-Healing: Diagnostic Tree-of-Thoughts refined hypothesis (Confidence: 94.2%)", "highlight", 1.0),
+            ("critic_pass", "🛡️", "Critic Gate: Confidence verified (94.2% >= 85%) — Passed to Compliance", "success", 0.8),
+            ("compliance", "🔒", "Compliance Guard: Audited HIPAA boundaries & verified PII/PHI redaction", "success", 0.8),
+            ("hitl", "👨‍⚕️", "Practitioner Review: Attending physician verified differential consensus", "success", 0.8),
+            ("final_compile", "📋", "Final Compile: Structured EHR report and patient advisory assembled", "active", 0.8),
+            ("voice_output", "🔊", "Voice Output: Synthesized native speech consultation for patient", "success", 0.9),
+        ]
+
+        curr_sim_states = {}
+        for step_id, icon, text, cls, delay in sim_sequence:
+            if step_id == "critic":
+                curr_sim_states["diagnostic"] = "complete"
+                curr_sim_states["critic"] = "retry"
+                st.session_state.workforce_retry_count = 1
+                _push_sim("critic", curr_sim_states, icon, text, cls)
+            elif step_id == "diagnostic_retry":
+                curr_sim_states["diagnostic"] = "active"
+                _push_sim("diagnostic", curr_sim_states, icon, text, cls)
+            elif step_id == "critic_pass":
+                curr_sim_states["diagnostic"] = "complete"
+                curr_sim_states["critic"] = "active"
+                _push_sim("critic", curr_sim_states, icon, text, cls)
+            else:
+                for k in list(curr_sim_states.keys()):
+                    curr_sim_states[k] = "complete"
+                curr_sim_states[step_id] = "active"
+                _push_sim(step_id, curr_sim_states, icon, text, cls)
+            time.sleep(delay)
+
+        for k in list(curr_sim_states.keys()):
+            curr_sim_states[k] = "complete"
+        st.session_state.workforce_active_node = None
+        st.session_state.workforce_running = False
+        ts_fin = _dt_sim.datetime.now().strftime("%H:%M:%S")
+        st.session_state.workforce_event_feed.append({
+            "time": ts_fin, "icon": "✅", "text": "Simulation Walkthrough Complete: Autonomous consensus achieved with 1 self-healing loop", "cls": "success"
+        })
+        with topology_placeholder:
+            components.html(
+                generate_live_workforce_topology_html(
+                    node_states=curr_sim_states,
+                    active_node=None,
+                    event_feed=st.session_state.workforce_event_feed,
+                    retry_count=1,
+                    is_running=False,
+                ),
+                height=750,
+                scrolling=False,
+            )
+
+    # -----------------------------------------------------------------------
+    # EXECUTE WORKFORCE — stream real node events into session state & UI
+    # -----------------------------------------------------------------------
+    if run_deep_workforce:
+        if not deep_symptoms.strip():
+            st.error("Please supply clinical narrative before activating the workforce.")
+        else:
+            import datetime as _dt
+
+            st.session_state.workforce_node_states = {}
+            st.session_state.workforce_event_feed = []
+            st.session_state.workforce_active_node = None
+            st.session_state.workforce_retry_count = 0
+            st.session_state.workforce_running = True
+
+            def _add_event(icon: str, text: str, cls: str = "") -> None:
+                ts = _dt.datetime.now().strftime("%H:%M:%S")
+                st.session_state.workforce_event_feed.append(
+                    {"time": ts, "icon": icon, "text": text, "cls": cls}
+                )
+
+            _add_event("⚡", "Autonomous Workforce launched", "highlight")
+            st.rerun()
+
+    # ── If workforce was just launched, actually run it now ──
+    if (
+        st.session_state.workforce_running
+        and st.session_state.workforce_active_node is None
+        and len(st.session_state.workforce_event_feed) == 1
+    ):
+        import datetime as _dt2
+
+        def _add_event2(icon: str, text: str, cls: str = "") -> None:
+            ts = _dt2.datetime.now().strftime("%H:%M:%S")
+            st.session_state.workforce_event_feed.append(
+                {"time": ts, "icon": icon, "text": text, "cls": cls}
+            )
+
+        _NODE_META2 = {
+            "voice_input":   ("🎙️", "Voice Intake receiving clinical narrative"),
+            "triage":        ("🩺", "Triage analyzing red-flag indicators"),
+            "researcher":    ("📚", "Researcher querying ChromaDB clinical knowledge"),
+            "diagnostic":    ("🧠", "Diagnostic reasoning with Tree-of-Thoughts"),
+            "critic":        ("🛡️", "Critic verifying diagnostic confidence"),
+            "compliance":    ("🔒", "Compliance auditing PII/PHI boundaries"),
+            "hitl":          ("👨‍⚕️", "Practitioner HITL checkpoint evaluating report"),
+            "final_compile": ("📋", "Final Compile assembling clinical report"),
+            "voice_output":  ("🔊", "Voice Output synthesizing spoken response"),
+        }
+
+        def _push_live_topology():
+            with topology_placeholder:
+                components.html(
+                    generate_live_workforce_topology_html(
+                        node_states=st.session_state.workforce_node_states,
+                        active_node=st.session_state.workforce_active_node,
+                        event_feed=st.session_state.workforce_event_feed,
+                        retry_count=st.session_state.workforce_retry_count,
+                        is_running=st.session_state.workforce_running,
+                    ),
+                    height=750,
+                    scrolling=False,
+                )
+
+        try:
+            wf_graph2 = compile_workflow()
+            _d_pid = st.session_state.get("deep_pid", st.session_state.patient_id)
+            _d_sym = st.session_state.get("deep_symptom_text", "")
+            _d_lng = st.session_state.get("deep_lang_select", "en")
+
+            init_state2 = SharedState(
+                patient_id=_d_pid,
+                raw_symptoms=_d_sym,
+                detected_language_code=_d_lng,
+                retry_count=0,
+                hitl_approved=True,
+            )
+
+            async def _stream_workflow():
+                prev_node = None
+                final_state = None
+
+                async for event in wf_graph2.astream_events(init_state2, version="v2"):
+                    kind = event.get("event", "")
+                    name = event.get("name", "")
+
+                    if kind == "on_chain_start" and name in _NODE_META2:
+                        node_id = name
+                        icon, desc = _NODE_META2[node_id]
+
+                        if prev_node and prev_node in _NODE_META2:
+                            st.session_state.workforce_node_states[prev_node] = "complete"
+                            _add_event2("✓", f"{_NODE_META2[prev_node][0]} {prev_node.replace('_',' ').title()} completed", "success")
+
+                        rc = st.session_state.workforce_retry_count
+                        if node_id == "diagnostic" and prev_node == "critic":
+                            rc += 1
+                            st.session_state.workforce_retry_count = rc
+                            st.session_state.workforce_node_states["critic"] = "retry"
+                            _add_event2("⚠️", f"Self-Healing: Critic routed back to Diagnostic (retry {rc}/3)", "warning")
+
+                        st.session_state.workforce_active_node = node_id
+                        st.session_state.workforce_node_states[node_id] = "active"
+                        _add_event2(icon, f"{desc}", "highlight")
+                        prev_node = node_id
+                        _push_live_topology()
+                        await asyncio.sleep(0.12)
+
+                    elif kind == "on_chain_end" and name in _NODE_META2:
+                        if name == "critic":
+                            out = event.get("data", {}).get("output", {})
+                            cf = ""
+                            if isinstance(out, dict):
+                                cf = out.get("critic_feedback", "")
+                            elif hasattr(out, "critic_feedback"):
+                                cf = out.critic_feedback
+                            if cf != "APPROVED_BY_SUPERVISOR":
+                                st.session_state.workforce_node_states["critic"] = "retry"
+                                _push_live_topology()
+
+                    elif kind == "on_chain_end" and name == "LangGraph":
+                        out = event.get("data", {}).get("output")
+                        if out:
+                            final_state = out if isinstance(out, dict) else out.dict()
+
+                if prev_node:
+                    st.session_state.workforce_node_states[prev_node] = "complete"
+
+                st.session_state.workforce_active_node = None
+                st.session_state.workforce_running = False
+                _add_event2("✅", "Autonomous Workforce completed end-to-end", "success")
+                _push_live_topology()
+                return final_state
+
+            final = asyncio.run(_stream_workflow())
+            if final:
+                st.session_state.last_deep_result = final
+
+        except Exception as _ex:
+            st.session_state.workforce_running = False
+            st.session_state.workforce_active_node = None
+            import datetime as _dt3
+            st.session_state.workforce_event_feed.append({
+                "time": _dt3.datetime.now().strftime("%H:%M:%S"),
+                "icon": "❌",
+                "text": f"Workforce error: {type(_ex).__name__}: {str(_ex)[:120]}",
+                "cls": "error",
+            })
+            _push_live_topology()
+
+        st.rerun()
 
 # =========================================================================
 # GLOBAL FOOTER

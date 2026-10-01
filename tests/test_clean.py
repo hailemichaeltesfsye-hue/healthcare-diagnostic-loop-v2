@@ -3,13 +3,17 @@ import sys
 from pathlib import Path
 import assemblyai as aai
 
+# Ensure UTF-8 output on Windows terminal
 if sys.platform == "win32":
     try:
         sys.stdout.reconfigure(encoding="utf-8")
     except Exception:
         pass
 
-env_file = Path(".env")
+# Ensure project root is on sys.path
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
+env_file = Path(__file__).resolve().parent.parent / ".env"
 if env_file.exists():
     for line in env_file.read_text(encoding="utf-8", errors="ignore").splitlines():
         if line.startswith("ASSEMBLYAI_API_KEY"):

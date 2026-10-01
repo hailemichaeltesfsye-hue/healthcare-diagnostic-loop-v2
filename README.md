@@ -153,69 +153,84 @@ Safety is embedded at every layer of MedVoice AI:
 
 ---
 
-## 10. Technology Stack
-- **Speech Recognition:** AssemblyAI SDK (`assemblyai >= 1.6`)
-- **Speech Synthesis:** Hardened Google TTS (`gTTS >= 2.5`) with multi-TLD retry & browser speech synthesis fallback
-- **Multi-Agent Orchestration:** LangGraph (`langgraph >= 0.1`) & Pydantic AI (`pydantic >= 2.0`)
-- **Clinical Reasoning Engine:** Groq API (`groq >= 0.9`, running `openai/gpt-oss-120b`)
-- **Semantic Memory / Vector DB:** ChromaDB (`chromadb >= 0.4`)
-- **Frontend Dashboard:** Streamlit (`streamlit >= 1.39`) with custom responsive CSS dark theme
-- **Language / Runtime:** Python 3.11+
+## 10. Project Structure
+
+```
+healthcare-diagnostic-loop-v2/
+│
+├── app.py                          # 🚀 Main Streamlit entry point — UI layout, session state, routing
+├── pyproject.toml                  # Project metadata & dependency declarations (uv / pip)
+├── uv.lock                         # Locked dependency graph for reproducible installs
+├── .env.example                    # Template for required API keys
+├── .env                            # Local environment variables (not committed)
+├── .gitignore                      # Git ignore rules
+├── DEMO_SCRIPT.md                  # Step-by-step hackathon demo walkthrough
+│
+├── .devcontainer/
+│   └── devcontainer.json           # GitHub Codespaces / VS Code Dev Container config
+│
+├── src/                            # 📦 Core application package
+│   ├── __init__.py
+│   │
+│   ├── agents/                     # 🤖 Autonomous AI agents
+│   │   ├── compliance.py           # HIPAA / safety compliance agent
+│   │   ├── critic.py               # Self-healing critic agent (confidence retry loop)
+│   │   ├── diagnostic.py           # Tree-of-Thoughts clinical diagnostic agent
+│   │   ├── researcher.py           # ChromaDB RAG evidence retrieval agent
+│   │   ├── supervisor.py           # Workflow supervisor / orchestrator
+│   │   ├── triage.py               # Emergency red-flag triage agent
+│   │   └── voice_agent.py          # End-to-end voice intake & response agent
+│   │
+│   ├── compliance/                 # 🛡️ Healthcare compliance utilities
+│   │   ├── halt_templates.py       # Pre-built safe-halt response templates
+│   │   └── pii_redaction.py        # Deterministic PII / PHI regex redaction
+│   │
+│   ├── db/                         # 🗄️ Vector database layer
+│   │   └── vector_store.py         # ChromaDB client — embed, upsert, similarity search
+│   │
+│   ├── graph/                      # 🔗 LangGraph multi-agent state machine
+│   │   ├── edges.py                # Conditional routing edges between graph nodes
+│   │   ├── nodes.py                # Node definitions wiring agents into the graph
+│   │   ├── pipeline.py             # Graph compilation & execution entrypoint
+│   │   └── state.py                # Shared TypedDict state schema for the workflow
+│   │
+│   ├── llm/                        # 🧠 LLM client abstraction
+│   │   └── groq_client.py          # Groq API client (model config, retries, streaming)
+│   │
+│   ├── mcp_server/                 # 🔌 MCP (Model Context Protocol) server
+│   │   ├── server.py               # MCP server bootstrap & handler registration
+│   │   └── tools.py                # Exposed MCP tool definitions
+│   │
+│   ├── safety/                     # 🚨 Real-time safety layer
+│   │   └── emergency_detector.py   # Keyword + semantic emergency / red-flag detection
+│   │
+│   ├── ui/                         # 🖥️ Multi-agent topology visualisation
+│   │   └── workforce_topology.py   # SVG/JS animated 9-node P2P workforce canvas
+│   │
+│   └── voice/                      # 🎙️ Voice pipeline (STT + TTS)
+│       ├── language_support.py     # LanguageProfile definitions for all 6 languages
+│       ├── nodes.py                # LangGraph voice-specific node implementations
+│       ├── retention.py            # Audio file lifecycle & cleanup helpers
+│       ├── synthesis_service.py    # gTTS multi-TLD TTS with Web Speech API fallback
+│       └── transcription_service.py# AssemblyAI STT — file, buffer & stream modes
+│
+├── scripts/                        # 🛠️ Developer utility scripts
+│   ├── purge_voice_outputs.py      # Bulk-delete cached TTS audio files
+│   ├── run_voice_loop.py           # Standalone CLI voice loop for headless testing
+│   └── test_groq.py                # Quick Groq API connectivity smoke test
+│
+├── tests/                          # ✅ Automated test suite
+│   ├── test_hackathon_suite.py     # Comprehensive end-to-end hackathon verification
+│   ├── test_all_languages.py       # 6-language compliance & synthesis round-trip test
+│   ├── test_arabic.py              # Arabic RTL clinical report test
+│   └── test_clean.py               # Isolated unit tests for safety & redaction logic
+│
+└── voice_output/                   # 🔊 Runtime TTS audio cache (auto-generated, gitignored)
+```
 
 ---
 
-## Project Structure
-
-```
-ai-driven-healthcare-diagnostic-loop/
-├── app.py                          # Streamlit dashboard — live motion graph UI, voice intake/output, exports
-├── pyproject.toml                  # Project metadata and dependencies
-├── uv.lock                         # Locked dependency versions
-├── .env.example                    # Template for required environment variables
-│
-├── scripts/
-│   ├── run_voice_loop.py           # CLI: run one case end-to-end from an audio file
-│   ├── purge_voice_outputs.py      # CLI: sweep old synthesized-report MP3s off disk (PHI retention)
-│   └── test_groq.py                # Standalone Groq connectivity smoke test
-│
-└── src/
-    ├── graph/                      # Orchestration layer: state, nodes, routing, graph assembly
-    │   ├── state.py                #   SharedState — the single typed object passed between all nodes
-    │   ├── nodes.py                #   Thin async adapters binding each agent to the graph
-    │   ├── edges.py                #   Conditional routing logic (critic retry gate, compliance branch)
-    │   └── pipeline.py             #   compile_workflow() — assembles the 9-node LangGraph StateGraph
-    │
-    ├── agents/                     # The clinical reasoning workforce
-    │   ├── triage.py                #   Symptom extraction (Groq LLM + rule-based fallback)
-    │   ├── researcher.py            #   Medical reference lookup via MCP tools
-    │   ├── diagnostic.py            #   Tree-of-Thoughts diagnostic reasoning + confidence scoring
-    │   ├── critic.py                #   Self-healing retry gate (reads diagnostic_confidence)
-    │   ├── compliance.py            #   PII/legal screening + localized final report composition
-    │   └── supervisor.py            #   Legacy sequential runner (not wired into compile_workflow)
-    │
-    ├── llm/                        # Shared LLM plumbing used by triage/diagnostic/compliance
-    │   └── groq_client.py           #   Retrying, JSON-mode Groq wrapper + token/cost accounting
-    │
-    ├── compliance/                 # Deterministic PII/PHI screening (no LLM involved)
-    │   ├── pii_redaction.py         #   Regex-based email/SSN/card/ID/phone detection + redaction
-    │   └── halt_templates.py        #   Static, pre-translated halt notices (6 languages)
-    │
-    ├── voice/                      # The multilingual voice round-trip
-    │   ├── language_support.py      #   Single source of truth: language codes ↔ display names ↔ flags
-    │   ├── transcription_service.py #   AssemblyAI wrapper (speech → text + language detection)
-    │   ├── synthesis_service.py     #   gTTS wrapper (text → speech in the patient's language)
-    │   ├── nodes.py                  #   voice_input_node / voice_output_node (LangGraph adapters)
-    │   └── retention.py              #   Purge helper for old synthesized-report MP3s
-    │
-    ├── db/
-    │   └── vector_store.py           # ChromaDB — retrieves historical patient context for reasoning
-    │
-    └── mcp_server/                  # Custom Model Context Protocol tool server
-        ├── server.py                 #   MCP server implementation
-        └── tools.py                  #   Exposed tools (medical guidelines, drug interactions, etc.)
-```
-
-## Module Guide
+## 11. Architectural Module Guide
 
 ### `src/graph/` — Orchestration
 The strictly-typed `SharedState` (Pydantic) is the only thing passed between nodes — no untyped dicts, no hidden agent context. `pipeline.py` assembles the full 9-node graph, including the conditional edges that make the critic retry loop and the compliance short-circuit actually work (previously dormant code in `edges.py` that nothing else in the repo ever triggered).
@@ -239,8 +254,18 @@ Unchanged from the original architecture: an in-memory ChromaDB store for histor
 
 ---
 
-## 11. Local Setup
+## 12. Technology Stack
+- **Speech Recognition:** AssemblyAI SDK (`assemblyai >= 1.6`)
+- **Speech Synthesis:** Hardened Google TTS (`gTTS >= 2.5`) with multi-TLD retry & browser speech synthesis fallback
+- **Multi-Agent Orchestration:** LangGraph (`langgraph >= 0.1`) & Pydantic AI (`pydantic >= 2.0`)
+- **Clinical Reasoning Engine:** Groq API (`groq >= 0.9`, running `openai/gpt-oss-120b`)
+- **Semantic Memory / Vector DB:** ChromaDB (`chromadb >= 0.4`)
+- **Frontend Dashboard:** Streamlit (`streamlit >= 1.39`) with custom responsive CSS dark theme
+- **Language / Runtime:** Python 3.11+
 
+---
+
+## 13. Local Setup
 ### Prerequisites
 - Python 3.11+
 - Git
@@ -261,7 +286,7 @@ cp .env.example .env
 
 ---
 
-## 12. Environment Variables
+## 14. Environment Variables
 Create a `.env` file in the project root (see `.env.example`):
 
 ```bash
@@ -280,7 +305,7 @@ VOICE_AUTO_PLAY=false
 
 ---
 
-## 13. How to Test & Use MedVoice AI
+## 15. How to Test & Use MedVoice AI
 
 ### Step 1: Launch the Application
 Start the Streamlit application using `uv`:
@@ -342,13 +367,16 @@ Located at the top of the interface under **1-Click Hackathon Evaluation Scenari
 
 #### 4. 🔬 Test the Deep 9-Node Multi-Agent Workforce
 1. In the sidebar under **🧭 Architecture Mode**, switch to **`🔬 Deep Clinical P2P Workforce`** *(or click `🚀 Dispatch to Deep Multi-Agent Workforce` from the summary card)*.
-2. View the interactive **Graphviz topology** visualizing the 9-node digital workforce:
-   - Voice Intake (AssemblyAI) ➔ Triage ➔ Researcher (ChromaDB RAG) ➔ Diagnostic (Tree-of-Thoughts) ⟲ Critic (Self-Healing Gate) ➔ Compliance ➔ Practitioner HITL ➔ Voice Output (gTTS).
-3. Click **`⚡ Execute Autonomous Workforce`** to stream clinical state packets across all peer nodes and generate a multi-agent consensus report with spoken audio.
+2. Experience the **Live AI Agent Collaboration Topology Visualization**:
+   - **9 Real Autonomous Nodes:** Voice Intake (AssemblyAI) ➔ Triage ➔ Researcher (ChromaDB RAG) ➔ Diagnostic (Tree-of-Thoughts) ⟲ Critic (Self-Healing Loop) ➔ Compliance ➔ Practitioner HITL ➔ Final Compile ➔ Voice Output (gTTS).
+   - **Live Traveling Data Packets:** Glowing animated particles flow along SVG connections between agents carrying clinical narrative, symptoms & flags, RAG context, and differential hypotheses.
+   - **Self-Healing Loopback Arc:** High-visibility amber/red reverse loop (Critic ➔ Diagnostic Reasoning) with active alarm pulse when confidence is below threshold (<85%).
+   - **Interactive Live Walkthrough Simulation:** Click **`▶ Live Simulation`** to watch a 60fps animated walkthrough of all 9 nodes collaborating with the self-healing loop in real time.
+3. Click **`⚡ Execute Autonomous Workforce`** to stream live clinical state packets across all peer nodes with real-time telemetry and generate a multi-agent consensus report with spoken audio.
 
 ---
 
-## 14. Example Conversations
+## 16. Example Conversations
 
 ### Scenario 1: Low-Risk Symptom Consultation (English)
 > **Patient (Voice):** *"I've had a dull tension headache for the past two days and I've been feeling unusually tired."*  
@@ -370,33 +398,42 @@ Located at the top of the interface under **1-Click Hackathon Evaluation Scenari
 
 ---
 
-## 15. Automated Test Suite
-Run the comprehensive hackathon verification suite:
-```bash
-# Run via pytest (recommended — uses the project venv automatically):
-uv run python -m pytest tests/ -v
+## 17. Automated Test Suite
+All test scripts and verification fixtures are consolidated within the `tests/` directory:
 
-# Or run directly as a script (uses asyncio.run internally):
+```bash
+# 1. Run the comprehensive hackathon verification suite:
 uv run python tests/test_hackathon_suite.py
+
+# 2. Run the 6-language compliance & report synthesis test:
+uv run python tests/test_all_languages.py
+
+# 3. Run the Arabic language and RTL clinical report test:
+uv run python tests/test_arabic.py
+
+# 4. Or run via pytest across all tests:
+uv run python -m pytest tests/test_hackathon_suite.py -v
 ```
+
 **Verification Scope:**
-- `[PASS]` Centralized 6-Language profile integrity
-- `[PASS]` Emergency & red-flag detection across all categories
+- `[PASS]` Centralized 6-Language profile integrity (en, am, ar, zh, fr, hi)
+- `[PASS]` Emergency & red-flag detection across all critical categories
 - `[PASS]` Deterministic PII/PHI redaction
 - `[PASS]` Multilingual speech synthesis across all 6 languages
-- `[PASS]` Real AssemblyAI Speech-to-Text API connectivity
+- `[PASS]` AssemblyAI Speech-to-Text API connectivity
 - `[PASS]` Multi-turn conversational adaptation & structured medical summaries
+- `[PASS]` Autonomous 9-node P2P workforce state graph & self-healing routing
 
 ---
 
-## 16. Limitations
+## 18. Limitations
 - **Decision-Support Only:** MedVoice AI is an informational triage assistant, not a licensed medical professional.
 - **No Physical Examination:** Acoustic and linguistic analysis cannot measure blood pressure, perform palpation, or take electrocardiograms.
 - **Audio Environment:** Excessive background noise or simultaneous multiple speakers can degrade speech transcription confidence.
 
 ---
 
-## 17. Future Improvements
+## 19. Future Improvements
 - **Direct WebRTC Real-Time Audio Streaming:** Integrating AssemblyAI WebSocket streaming directly with browser audio worklets for sub-300ms turn-taking.
 - **Acoustic Biomarker Analysis:** Detecting vocal tremors, dyspnea (shortness of breath during pauses), and cough characteristics from raw spectrograms.
 - **EHR/FHIR Native Integration:** Automatic dispatch of structured summaries into Epic and Cerner electronic health records.
@@ -404,7 +441,7 @@ uv run python tests/test_hackathon_suite.py
 
 ---
 
-## Configuration Reference
+## 20. Configuration Reference
 
 | Variable | Required | Purpose |
 |---|---|---|
@@ -416,14 +453,14 @@ uv run python tests/test_hackathon_suite.py
 
 ---
 
-## Author
+## 21. Author
 
 **Hailemichael Tesfaye Mekuria**
 [LinkedIn](https://www.linkedin.com/in/hailemichael-tesfaye-2b7114401/) · [GitHub](https://github.com/hailemichaeltesfsye-hue)
 
 ---
 
-## License & Disclaimer
+## 22. License & Disclaimer
 This project is licensed under the Apache 2.0 License.
 
 **Clinical Disclaimer:** MedVoice AI is designed for demonstration and research purposes under the AssemblyAI Voice Agent Hackathon 2026. It does not provide medical diagnosis or treatment. In a medical emergency, immediately contact local emergency services.
