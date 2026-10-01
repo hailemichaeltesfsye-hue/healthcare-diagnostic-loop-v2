@@ -248,8 +248,8 @@ Unchanged from the original architecture: an in-memory ChromaDB store for histor
 ### Installation
 ```bash
 # 1. Clone repository
-git clone https://github.com/your-username/medvoice-ai.git
-cd medvoice-ai
+git clone https://github.com/hailemichaeltesfsye-hue/healthcare-diagnostic-loop-v2.git
+cd healthcare-diagnostic-loop-v2
 
 # 2. Install all dependencies (uses uv — installs Python 3.11 venv automatically)
 uv sync
